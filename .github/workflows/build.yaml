@@ -11,12 +11,17 @@ jobs:
       - name: Install Platform.IO environment
         shell: bash
         run: |
-          apt update
+          sudo apt update
           export DEBIAN_FRONTEND=noninteractive
-          apt install -y git curl python3 python3-pip python3-venv git cmake
+          sudo apt install -y git curl python3 python3-pip python3-venv git cmake
           python3 -c "$(curl -fsSL https://raw.githubusercontent.com/platformio/platformio/master/scripts/get-platformio.py)"
       - name: Build
         shell: bash
         run: |
           export PATH=$PATH:~/.platformio/penv/bin
           pio run -v
+      - name: Archive firmware.uf2
+        uses: actions/upload-artifact@v3
+        with:
+          name: firmware.uf2
+          path: .pio/build/default/firmware.uf2
