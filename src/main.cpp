@@ -58,8 +58,8 @@ void setup() {
     digitalWrite(PIN_RASPI_POWER, HIGH);
 
     // Configure serial transport
-    Serial.begin(115200);
-    set_microros_serial_transports(Serial);
+    Serial1.begin(115200);
+    set_microros_serial_transports(Serial1);
     delay(2000);
 
     configureNode();
