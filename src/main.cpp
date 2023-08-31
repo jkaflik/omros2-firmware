@@ -56,6 +56,7 @@ void setup() {
     pinMode(PIN_ENABLE_CHARGE, OUTPUT);
 
     digitalWrite(PIN_RASPI_POWER, HIGH);
+    digitalWrite(PIN_ENABLE_CHARGE, LOW);
 
     // Configure serial transport
     Serial1.begin(115200);
@@ -131,6 +132,8 @@ void chargingLoop() {
     batteryState.power_supply_status = shouldCharge
             ? (isCharging ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_NOT_CHARGING)
             : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_DISCHARGING;
+
+    digitalWrite(PIN_ENABLE_CHARGE, shouldCharge ? HIGH : LOW);
 
     lastChargingLoop = now;
 }
