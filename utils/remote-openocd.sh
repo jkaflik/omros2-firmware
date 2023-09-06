@@ -37,21 +37,33 @@ function restartPico() {
         exit 1
     fi
 
-    echo "23" > /sys/class/gpio/export &>2 /dev/null || true
+    echo "23" > /sys/class/gpio/export || true
     sleep 1
     echo "out" > /sys/class/gpio/gpio23/direction
 
     echo "Restarting Pico..."
     echo "1" > /sys/class/gpio/gpio23/value
-    sleep 0.5
-    echo "0" > /sys/class/gpio/gpio23/value
     echo "Pico restarted"
-    sleep 2
+}
+
+function cleanupRestartPico() {
+    echo "0" > /sys/class/gpio/gpio23/value
+    echo "23" > /sys/class/gpio/unexport
+    echo "Pico restart finished"
 }
 
 if [ "$action" == "flash" ]; then
   echo "Flashing firmware from $firmware_path..."
 
-#  restartPico
+  restartPico
   openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "program $firmware_path verify reset exit"
+  cleanupRestartPico
+fi
+
+if [ "$action" == "debug" ]; then
+  echo "Starting debug session..."
+
+  restartPico
+  openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "bindto 0.0.0.0" || cleanupRestartPico
+  cleanupRestartPico
 fi
