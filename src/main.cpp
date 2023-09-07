@@ -37,6 +37,7 @@ rcl_node_t node;
 rcl_timer_t pingAgentTimer;
 rcl_timer_t batteryStateTimer;
 bool rosAgentConnected;
+uint8_t agentPingAttempts = 0;
 
 void configureNode();
 
@@ -105,6 +106,19 @@ void publishBatteryStateCallback(rcl_timer_t * timer, int64_t last_call_time) {
         RCSOFTCHECK(rcl_publish(&chargerPresentPublisher, &chargerPresentMsg, NULL));
 
         rosAgentConnected = RMW_RET_OK == rmw_uros_ping_agent(100, 1);
+
+        if (!rosAgentConnected) {
+            agentPingAttempts++;
+        }
+
+        if (rosAgentConnected) {
+            agentPingAttempts = 0;
+        }
+
+        if (agentPingAttempts == 5) {
+            // todo: work around for https://github.com/jkaflik/omros2-firmware/issues/1
+            watchdog_reboot(0, 0, 0);
+        }
     }
 }
 
