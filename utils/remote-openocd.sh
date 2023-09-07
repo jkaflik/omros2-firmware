@@ -31,6 +31,8 @@ if [ -z "$(whereis openocd)" ]; then
     sudo apt install -y openocd
 fi
 
+killall openocd > /dev/null || true
+
 function restartPico() {
     if ! groups | grep -q "gpio"; then
         echo "User is not in gpio group, please add the user to gpio group and re-login: sudo adduser $USER gpio"
@@ -47,7 +49,6 @@ function restartPico() {
 }
 
 function cleanupRestartPico() {
-    echo "0" > /sys/class/gpio/gpio23/value
     echo "23" > /sys/class/gpio/unexport
     echo "Pico restart finished"
 }
@@ -65,5 +66,11 @@ if [ "$action" == "debug" ]; then
 
   restartPico
   openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "bindto 0.0.0.0" || cleanupRestartPico
+  cleanupRestartPico
+fi
+
+if [ "$action" == "reset" ]; then
+  restartPico
+  sleep 0.5
   cleanupRestartPico
 fi
