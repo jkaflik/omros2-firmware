@@ -5,9 +5,11 @@
 #include <rclc/executor.h>
 
 #include <sensor_msgs/msg/battery_state.h>
+#include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/bool.h>
 
+#include "imu.h"
 #include "pins.h"
 #include "hardware.h"
 
@@ -22,11 +24,13 @@
 rcl_publisher_t batteryStatePublisher;
 rcl_publisher_t chargeVoltagePublisher;
 rcl_publisher_t chargerPresentPublisher;
+rcl_publisher_t imuPublisher;
 sensor_msgs__msg__BatteryState batteryState = {
     .design_capacity = BATT_DESIGNED_CAPACITY,
     .power_supply_technology = sensor_msgs__msg__BatteryState__POWER_SUPPLY_TECHNOLOGY_LION,
     .present = true,
 };
+sensor_msgs__msg__Imu imuMsg;
 std_msgs__msg__Float32 chargeVoltageMsg;
 std_msgs__msg__Bool chargerPresentMsg;
 
@@ -34,7 +38,7 @@ rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
-rcl_timer_t pingAgentTimer;
+rcl_timer_t imuTimer;
 rcl_timer_t batteryStateTimer;
 bool rosAgentConnected;
 uint8_t agentPingAttempts = 0;
@@ -46,6 +50,8 @@ void chargingLoop();
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
 
+
+#define imuFrequency 50
 
 NeoPixelConnect *led;
 ulong lastLEDUpdate;
@@ -89,13 +95,15 @@ void error_loop() {
     }
 }
 
-void pingAgentCallback(rcl_timer_t * timer, int64_t last_call_time) {
+void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
     RCLC_UNUSED(last_call_time);
     if (timer == NULL) {
         return;
     }
 
-    rosAgentConnected = RMW_RET_OK == rmw_uros_ping_agent(100, 1);
+    if (imuRead(&imuMsg)) {
+        RCSOFTCHECK(rcl_publish(&imuPublisher, &imuMsg, NULL));
+    }
 }
 
 void publishBatteryStateCallback(rcl_timer_t * timer, int64_t last_call_time) {
@@ -152,6 +160,11 @@ void setup() {
     // orange LED
     setLED(255, 128, 0);
 
+    if (!initIMU()) {
+        setLED(50, 50, 50);
+        delay(500);
+    }
+
     // Configure serial transport
     Serial1.begin(115200);
     set_microros_serial_transports(Serial1);
@@ -184,6 +197,11 @@ void configureNode() {
             &node,
             ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
             "power/charger_present"));
+    RCCHECK(rclc_publisher_init_default(
+            &imuPublisher,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+            "imu"));
 
     RCCHECK(rclc_timer_init_default(
             &batteryStateTimer,
@@ -191,9 +209,16 @@ void configureNode() {
             RCL_MS_TO_NS(1000),
             publishBatteryStateCallback));
 
+    RCCHECK(rclc_timer_init_default(
+            &imuTimer,
+            &support,
+            RCL_MS_TO_NS(1000 / imuFrequency),
+            publishIMU));
+
     // create executor
-    RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
     RCCHECK(rclc_executor_add_timer(&executor, &batteryStateTimer));
+    RCCHECK(rclc_executor_add_timer(&executor, &imuTimer));
 }
 
 void loop() {
