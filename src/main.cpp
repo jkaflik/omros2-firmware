@@ -14,12 +14,17 @@
 #include "hardware.h"
 
 #include <NeoPixelConnect.h>
+#include <EMA.h>
 
 #if !defined(MICRO_ROS_TRANSPORT_ARDUINO_SERIAL)
 #error Only Micro-ROS serial transport is supported
 #endif
 
-#define CHARGING_UPDATE_INTERVAL 1000
+#define CHARGING_UPDATE_INTERVAL 50
+
+EMA<2> batteryVoltageEMA;
+EMA<2> chargeCurrentEMA;
+EMA<2> chargeVoltageEMA;
 
 rcl_publisher_t batteryStatePublisher;
 rcl_publisher_t chargeVoltagePublisher;
@@ -90,9 +95,10 @@ void updateLED() {
 void error_loop() {
     setLED(255, 0, 0);
 
-    while (1) {
-        delay(100);
-    }
+    delay(1000);
+
+    // todo: work around for https://github.com/jkaflik/omros2-firmware/issues/1
+    watchdog_reboot(0, 0, 0);
 }
 
 void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
@@ -173,9 +179,14 @@ void setup() {
 }
 
 void configureNode() {
-    allocator = rcl_get_default_allocator();
+    while (RMW_RET_OK != rmw_uros_ping_agent(10, 1)) {
+        setLED(255, 0, 0);
+        delay(500);
+        setLED(0, 0, 0);
+        delay(500);
+    }
 
-    //create init_options
+    allocator = rcl_get_default_allocator();
     RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
 
     // create node
@@ -235,15 +246,20 @@ void chargingLoop() {
         return;
     }
 
-    batteryState.voltage = (float) analogRead(PIN_ANALOG_BATTERY_VOLTAGE)
+    uint16_t readFiltered;
+
+    readFiltered = batteryVoltageEMA(analogRead(PIN_ANALOG_BATTERY_VOLTAGE));
+    batteryState.voltage = (float) readFiltered
                            * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
-    batteryState.charge = (float) analogRead(PIN_ANALOG_CHARGE_CURRENT)
+    readFiltered = chargeCurrentEMA(analogRead(PIN_ANALOG_CHARGE_CURRENT));
+    batteryState.charge = (float) readFiltered
                           * (3.3f / 4096.0f) / (CURRENT_SENSE_GAIN * R_SHUNT);
 
     batteryState.present = batteryState.voltage > BATT_PRESENT_VOLTAGE;
 
+    readFiltered = chargeVoltageEMA(analogRead(PIN_ANALOG_CHARGE_VOLTAGE));
     chargeVoltageMsg.data =
-            (float) analogRead(PIN_ANALOG_CHARGE_VOLTAGE) * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
+            (float) readFiltered * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
 
     chargerPresentMsg.data = chargeVoltageMsg.data >= CHARGER_PRESENT_VOLTAGE;
 
