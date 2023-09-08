@@ -22,6 +22,8 @@
 
 #define CHARGING_UPDATE_INTERVAL 50
 
+extern "C" int clock_gettime(clockid_t unused, struct timespec *tp);
+
 EMA<2> batteryVoltageEMA;
 EMA<2> chargeCurrentEMA;
 EMA<2> chargeVoltageEMA;
@@ -43,6 +45,7 @@ rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
+rcl_timer_t synchronizeTimer;
 rcl_timer_t imuTimer;
 rcl_timer_t batteryStateTimer;
 bool rosAgentConnected;
@@ -101,15 +104,30 @@ void error_loop() {
     watchdog_reboot(0, 0, 0);
 }
 
+void synchronizeCallback(rcl_timer_t *timer, int64_t last_call_time) {
+    RCLC_UNUSED(last_call_time);
+    if (timer == NULL) {
+        return;
+    }
+
+    RCSOFTCHECK(rmw_uros_sync_session(10));
+}
+
 void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
     RCLC_UNUSED(last_call_time);
     if (timer == NULL) {
         return;
     }
 
-    if (imuRead(&imuMsg)) {
-        RCSOFTCHECK(rcl_publish(&imuPublisher, &imuMsg, NULL));
+    if (!imuRead(&imuMsg)) {
+        return;
     }
+
+    auto ns = rmw_uros_epoch_nanos();
+    imuMsg.header.stamp.sec = ns / 1000000000;
+    imuMsg.header.stamp.nanosec = ns % 1000000000;
+
+    RCSOFTCHECK(rcl_publish(&imuPublisher, &imuMsg, NULL));
 }
 
 void publishBatteryStateCallback(rcl_timer_t * timer, int64_t last_call_time) {
@@ -226,10 +244,19 @@ void configureNode() {
             RCL_MS_TO_NS(1000 / imuFrequency),
             publishIMU));
 
+    RCCHECK(rclc_timer_init_default(
+            &synchronizeTimer,
+            &support,
+            RCL_S_TO_NS(60),
+            synchronizeCallback))
+
     // create executor
-    RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
+    RCCHECK(rclc_executor_add_timer(&executor, &synchronizeTimer));
     RCCHECK(rclc_executor_add_timer(&executor, &batteryStateTimer));
     RCCHECK(rclc_executor_add_timer(&executor, &imuTimer));
+
+    RCCHECK(rmw_uros_sync_session(10));
 }
 
 void loop() {
