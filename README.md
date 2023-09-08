@@ -24,5 +24,7 @@ platformio run -t upload
 Since I haven't managed PlatformIO to run my command beforehand, you need to run it manually:
 
 ```bash
-scp ./utils/remote-openocd.sh openmower.local:/tmp/remote-openocd.sh && ssh openmower.local /tmp/remote-openocd.sh reset
+scp ./utils/remote-openocd.sh openmower.local:/tmp/remote-openocd.sh && ssh openmower.local /tmp/remote-openocd.sh debug
 ```
+
+Then you can run debugging session in your IDE. (VSCode or CLion)
