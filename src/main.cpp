@@ -126,6 +126,9 @@ void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
     auto ns = rmw_uros_epoch_nanos();
     imuMsg.header.stamp.sec = ns / 1000000000;
     imuMsg.header.stamp.nanosec = ns % 1000000000;
+    imuMsg.header.frame_id.capacity = 3;
+    imuMsg.header.frame_id.data = "imu";
+    imuMsg.header.frame_id.size = 3;
 
     RCSOFTCHECK(rcl_publish(&imuPublisher, &imuMsg, NULL));
 }
