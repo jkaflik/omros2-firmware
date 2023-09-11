@@ -40,5 +40,7 @@ bool imuRead(sensor_msgs__msg__Imu *imuMsg) {
     imuMsg->angular_velocity.y = gyroscope[1] * (PI / 180.0) / 1000.0;
     imuMsg->angular_velocity.z = gyroscope[2] * (PI / 180.0) / 1000.0;
 
+    imuMsg->orientation_covariance[0] = -1; // orientation data is not available
+
     return success;
 }
