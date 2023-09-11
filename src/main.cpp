@@ -233,7 +233,7 @@ void configureNode() {
             &imuPublisher,
             &node,
             ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-            "imu"));
+            "imu/data_raw"));
 
     RCCHECK(rclc_timer_init_default(
             &batteryStateTimer,
