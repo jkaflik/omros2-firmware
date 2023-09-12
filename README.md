@@ -1,4 +1,12 @@
+# omros2-firmware
+
+## Overview
+
+This is a OpenMower mainboard firmware replacement to work with [OpenMowerROS2](https://jkaflik.github.io/OpenMowerROS2/) alternative ROS software.
+More details about this firmware can be found in [documentation](https://jkaflik.github.io/OpenMowerROS2/omros2-firmware.html).
+
 ## Build
+
 ### Prepare environment
 By default, Raspberry Pi SWD on a remote Raspberry Pi is configured as the upload & debug protocol.
 
