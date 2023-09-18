@@ -32,12 +32,12 @@ bool imuRead(sensor_msgs__msg__Imu *imuMsg) {
     success &= IMU.Get_X_Axes(accelerometer) == 0;
     success &= IMU.Get_G_Axes(gyroscope) == 0;
 
-    imuMsg->linear_acceleration.x = accelerometer[0] * 9.81 / 1000.0;
-    imuMsg->linear_acceleration.y = accelerometer[1] * 9.81 / 1000.0;
+    imuMsg->linear_acceleration.x = -accelerometer[1] * 9.81 / 1000.0;
+    imuMsg->linear_acceleration.y = accelerometer[0] * 9.81 / 1000.0;
     imuMsg->linear_acceleration.z = accelerometer[2] * 9.81 / 1000.0;
 
-    imuMsg->angular_velocity.x = gyroscope[0] * (PI / 180.0) / 1000.0;
-    imuMsg->angular_velocity.y = gyroscope[1] * (PI / 180.0) / 1000.0;
+    imuMsg->angular_velocity.x = -gyroscope[1] * (PI / 180.0) / 1000.0;
+    imuMsg->angular_velocity.y = gyroscope[0] * (PI / 180.0) / 1000.0;
     imuMsg->angular_velocity.z = gyroscope[2] * (PI / 180.0) / 1000.0;
 
     imuMsg->orientation_covariance[0] = -1; // orientation data is not available
