@@ -22,55 +22,60 @@ if [ "$action" == "flash" ]; then
     firmware_path=$2
 fi
 
-if [ -z "$(whereis raspinfo)" ]; then
-    echo "This script runs only on Raspberry Pi"
+if ! command -v raspi-config &>/dev/null; then
+    echo "Is this a Raspberry Pi? raspi-config could not be found, please install it first"
     exit 1
 fi
 
-if [ -z "$(whereis openocd)" ]; then
-    sudo apt install -y openocd
+if ! groups | grep -q "gpio"; then
+    echo "User is not in gpio group, please add the user to gpio group and re-login: sudo adduser $USER gpio"
+    exit 1
 fi
 
-killall openocd > /dev/null || true
+if ! command -v /usr/local/bin/openocd &>/dev/null; then
+    echo "openocd could not be found, installing it now..."
 
-function restartPico() {
-    if ! groups | grep -q "gpio"; then
-        echo "User is not in gpio group, please add the user to gpio group and re-login: sudo adduser $USER gpio"
-        exit 1
-    fi
+    sudo apt-get update >/dev/null
+    sudo apt-get install -y libtool libjim-dev
 
-    echo "23" > /sys/class/gpio/export || true
-    sleep 1
-    echo "out" > /sys/class/gpio/gpio23/direction
+    git clone git@github.com:openocd-org/openocd.git
+    cd openocd
+    ./bootstrap
+    ./configure --disable-werror
+    make -j4
+    sudo make install
+fi
 
-    echo "Restarting Pico..."
-    echo "1" > /sys/class/gpio/gpio23/value
-    echo "Pico restarted"
+function openocdConfig() {
+    cat <<EOF >/tmp/openocd.cfg
+adapter driver linuxgpiod
+
+# pintctrl GPIO chip is num 4
+
+adapter gpio swclk -chip 4 25
+adapter gpio swdio -chip 4 24
+
+reset_config none
+
+# Target is RP2040 chip on the Pico
+source [find target/rp2040.cfg]
+EOF
 }
 
-function cleanupRestartPico() {
-    echo "23" > /sys/class/gpio/unexport
-    echo "Pico restart finished"
-}
+killall openocd >/dev/null || true
+openocdConfig
 
 if [ "$action" == "flash" ]; then
-  echo "Flashing firmware from $firmware_path..."
-
-  restartPico
-  openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "program $firmware_path verify reset exit"
-  cleanupRestartPico
+    echo "Flashing firmware from $firmware_path..."
+    /usr/local/bin/openocd \
+        -f /tmp/openocd.cfg \
+        -c "program $firmware_path verify reset exit"
 fi
 
 if [ "$action" == "debug" ]; then
-  echo "Starting debug session..."
+    echo "Starting debug session..."
 
-  restartPico
-  openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "bindto 0.0.0.0" || cleanupRestartPico
-  cleanupRestartPico
-fi
-
-if [ "$action" == "reset" ]; then
-  restartPico
-  sleep 0.5
-  cleanupRestartPico
+    /usr/local/bin/openocd \
+        -f /tmp/openocd.cfg \
+        -c "bindto 0.0.0.0"
 fi

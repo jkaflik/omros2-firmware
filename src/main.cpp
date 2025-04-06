@@ -12,8 +12,8 @@
 #include "imu.h"
 #include "pins.h"
 #include "hardware.h"
+#include "led_status.hpp"
 
-#include <NeoPixelConnect.h>
 #include <EMA.h>
 
 #if !defined(MICRO_ROS_TRANSPORT_ARDUINO_SERIAL)
@@ -51,75 +51,63 @@ rcl_timer_t batteryStateTimer;
 bool rosAgentConnected;
 uint8_t agentPingAttempts = 0;
 
+bool rosInitialized = false;
+bool rosInitializationInProgress = false;
+bool core1Ready = false;
+
 void configureNode();
 
 void chargingLoop();
 
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
-#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
-
+#define RCCHECK(fn)                  \
+    {                                \
+        rcl_ret_t temp_rc = fn;      \
+        if ((temp_rc != RCL_RET_OK)) \
+        {                            \
+            error_loop();            \
+        }                            \
+    }
+#define RCSOFTCHECK(fn)              \
+    {                                \
+        rcl_ret_t temp_rc = fn;      \
+        if ((temp_rc != RCL_RET_OK)) \
+        {                            \
+        }                            \
+    }
 
 #define imuFrequency 50
 
-NeoPixelConnect *led;
-ulong lastLEDUpdate;
-bool ledBlinkState;
-void setLED(uint8_t r, uint8_t g, uint8_t b, bool blink = false) {
-    if (led == NULL) {
-        return;
-    }
-
-    if (blink && ledBlinkState) {
-        led->neoPixelSetValue(0, 0, 0, 0, true);
-    } else {
-        led->neoPixelSetValue(0, r, g, b, true);
-    }
-}
-void updateLED() {
-    auto now = millis();
-    if (now - lastLEDUpdate < 500) {
-        return;
-    }
-
-    if (rosAgentConnected) {
-        // green
-        setLED(0, 255, 0);
-    } else {
-        // blink red
-        setLED(255, 0, 0, true);
-    }
-
-    lastLEDUpdate = now;
-    ledBlinkState = !ledBlinkState;
-}
-
-
-// Error handle loop
-void error_loop() {
-    setLED(255, 0, 0);
-
+void error_loop()
+{
+    // Special error handling - constant red light
+    ledStatus.setColor(255, 0, 0, false);
     delay(1000);
 
     // todo: work around for https://github.com/jkaflik/omros2-firmware/issues/1
     watchdog_reboot(0, 0, 0);
 }
 
-void synchronizeCallback(rcl_timer_t *timer, int64_t last_call_time) {
+void synchronizeCallback(rcl_timer_t *timer, int64_t last_call_time)
+{
     RCLC_UNUSED(last_call_time);
-    if (timer == NULL) {
+    if (timer == NULL)
+    {
         return;
     }
 
     RCSOFTCHECK(rmw_uros_sync_session(10));
 }
 
-void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
+void publishIMU(rcl_timer_t *timer, int64_t last_call_time)
+{
     RCLC_UNUSED(last_call_time);
-    if (timer == NULL) {
+    if (timer == NULL)
+    {
         return;
     }
 
-    if (!imuRead(&imuMsg)) {
+    if (!imuRead(&imuMsg))
+    {
         return;
     }
 
@@ -133,48 +121,104 @@ void publishIMU(rcl_timer_t * timer, int64_t last_call_time) {
     RCSOFTCHECK(rcl_publish(&imuPublisher, &imuMsg, NULL));
 }
 
-void publishBatteryStateCallback(rcl_timer_t * timer, int64_t last_call_time) {
+void publishBatteryStateCallback(rcl_timer_t *timer, int64_t last_call_time)
+{
     RCLC_UNUSED(last_call_time);
-    if (timer != NULL) {
+    if (timer != NULL)
+    {
         RCSOFTCHECK(rcl_publish(&batteryStatePublisher, &batteryState, NULL));
         RCSOFTCHECK(rcl_publish(&chargeVoltagePublisher, &chargeVoltageMsg, NULL));
         RCSOFTCHECK(rcl_publish(&chargerPresentPublisher, &chargerPresentMsg, NULL));
 
         rosAgentConnected = RMW_RET_OK == rmw_uros_ping_agent(100, 1);
+        ledStatus.setFlag(LED_STATUS_ROS_CONNECTED, rosAgentConnected);
 
-        if (!rosAgentConnected) {
+        if (!rosAgentConnected)
+        {
             agentPingAttempts++;
         }
 
-        if (rosAgentConnected) {
+        if (rosAgentConnected)
+        {
             agentPingAttempts = 0;
         }
 
-        if (agentPingAttempts == 5) {
+        if (agentPingAttempts == 5)
+        {
             // todo: work around for https://github.com/jkaflik/omros2-firmware/issues/1
             watchdog_reboot(0, 0, 0);
         }
     }
 }
 
-void setup1() {
+void setup1()
+{
+    // Configure serial transport
+    Serial1.begin(115200);
+    set_microros_serial_transports(Serial1);
+
+    core1Ready = true;
+}
+
+void loop1()
+{
+    // Handle ROS initialization in loop1
+    if (!rosInitialized && !rosInitializationInProgress)
+    {
+        rosInitializationInProgress = true;
+
+        // Check if ROS agent is available
+        if (RMW_RET_OK == rmw_uros_ping_agent(100, 1))
+        {
+            configureNode();
+        }
+
+        rosInitializationInProgress = false;
+    }
+
+    // If ROS is initialized, perform ROS operations
+    if (rosInitialized)
+    {
+        RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)));
+
+        // Check ROS connection periodically
+        static unsigned long lastRosCheck = 0;
+        if (millis() - lastRosCheck > 1000)
+        {
+            rosAgentConnected = RMW_RET_OK == rmw_uros_ping_agent(100, 1);
+            ledStatus.setFlag(LED_STATUS_ROS_CONNECTED, rosAgentConnected);
+            lastRosCheck = millis();
+
+            if (!rosAgentConnected)
+            {
+                agentPingAttempts++;
+            }
+            else
+            {
+                agentPingAttempts = 0;
+            }
+
+            // If connection lost for too long, reset ROS
+            if (agentPingAttempts >= 5)
+            {
+                // Reset ROS
+                rosInitialized = false;
+
+                // Clean up resources if needed
+                // (Add cleanup code if necessary)
+            }
+        }
+    }
+}
+
+void setup()
+{
+    delay(500);
     pinMode(LED_BUILTIN, OUTPUT);
-}
 
-void loop1() {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(500);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(500);
-}
-
-void setup() {
-    delay(500);
-
-    led = new NeoPixelConnect(PIN_NEOPIXEL, 1);
-
-    // yellow LED
-    setLED(255, 255, 0);
+    ledStatus.init(PIN_NEOPIXEL, 1);
+    // yellow LED for startup
+    ledStatus.setColor(255, 255, 0, false);
 
     analogReadResolution(12);
 
@@ -184,145 +228,210 @@ void setup() {
     digitalWrite(PIN_RASPI_POWER, HIGH);
     digitalWrite(PIN_ENABLE_CHARGE, LOW);
 
-    // orange LED
-    setLED(255, 128, 0);
+    // orange LED for IMU initialization
+    ledStatus.setColor(255, 128, 0, false);
 
-    if (!initIMU()) {
-        setLED(50, 50, 50);
+    if (!initIMU())
+    {
+        ledStatus.setColor(50, 50, 50, false);
         delay(500);
     }
-
-    // Configure serial transport
-    Serial1.begin(115200);
-    set_microros_serial_transports(Serial1);
-
-    configureNode();
 }
 
-void configureNode() {
-    while (RMW_RET_OK != rmw_uros_ping_agent(10, 1)) {
-        setLED(255, 0, 0);
-        delay(500);
-        setLED(0, 0, 0);
-        delay(500);
-    }
-
+void configureNode()
+{
+    // Initialize ROS
     allocator = rcl_get_default_allocator();
-    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+    if (RCL_RET_OK == rclc_support_init(&support, 0, NULL, &allocator))
+    {
 
-    // create node
-    RCCHECK(rclc_node_init_default(&node, "openmower_mainboard", "", &support));
+        // Create node
+        if (RCL_RET_OK == rclc_node_init_default(&node, "openmower_mainboard", "", &support))
+        {
 
-    // create BatteryState batteryStatePublisher
-    RCCHECK(rclc_publisher_init_default(
-            &batteryStatePublisher,
-            &node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState),
-            "power"));
-    RCCHECK(rclc_publisher_init_default(
-            &chargeVoltagePublisher,
-            &node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-            "power/charge_voltage"));
-    RCCHECK(rclc_publisher_init_default(
-            &chargerPresentPublisher,
-            &node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
-            "power/charger_present"));
-    RCCHECK(rclc_publisher_init_default(
-            &imuPublisher,
-            &node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-            "imu/data_raw"));
+            // Initialize publishers
+            bool publishers_ok = true;
 
-    RCCHECK(rclc_timer_init_default(
-            &batteryStateTimer,
-            &support,
-            RCL_MS_TO_NS(1000),
-            publishBatteryStateCallback));
+            publishers_ok &= (RCL_RET_OK == rclc_publisher_init_default(
+                                                &batteryStatePublisher,
+                                                &node,
+                                                ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState),
+                                                "power"));
 
-    RCCHECK(rclc_timer_init_default(
-            &imuTimer,
-            &support,
-            RCL_MS_TO_NS(1000 / imuFrequency),
-            publishIMU));
+            publishers_ok &= (RCL_RET_OK == rclc_publisher_init_default(
+                                                &chargeVoltagePublisher,
+                                                &node,
+                                                ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+                                                "power/charge_voltage"));
 
-    RCCHECK(rclc_timer_init_default(
-            &synchronizeTimer,
-            &support,
-            RCL_S_TO_NS(60),
-            synchronizeCallback))
+            publishers_ok &= (RCL_RET_OK == rclc_publisher_init_default(
+                                                &chargerPresentPublisher,
+                                                &node,
+                                                ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+                                                "power/charger_present"));
 
-    // create executor
-    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
-    RCCHECK(rclc_executor_add_timer(&executor, &synchronizeTimer));
-    RCCHECK(rclc_executor_add_timer(&executor, &batteryStateTimer));
-    RCCHECK(rclc_executor_add_timer(&executor, &imuTimer));
+            publishers_ok &= (RCL_RET_OK == rclc_publisher_init_default(
+                                                &imuPublisher,
+                                                &node,
+                                                ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+                                                "imu/data_raw"));
 
-    RCCHECK(rmw_uros_sync_session(10));
+            if (publishers_ok)
+            {
+                // Initialize timers
+                bool timers_ok = true;
+
+                timers_ok &= (RCL_RET_OK == rclc_timer_init_default(
+                                                &batteryStateTimer,
+                                                &support,
+                                                RCL_MS_TO_NS(1000),
+                                                publishBatteryStateCallback));
+
+                timers_ok &= (RCL_RET_OK == rclc_timer_init_default(
+                                                &imuTimer,
+                                                &support,
+                                                RCL_MS_TO_NS(1000 / imuFrequency),
+                                                publishIMU));
+
+                timers_ok &= (RCL_RET_OK == rclc_timer_init_default(
+                                                &synchronizeTimer,
+                                                &support,
+                                                RCL_S_TO_NS(60),
+                                                synchronizeCallback));
+
+                if (timers_ok)
+                {
+                    // Create executor
+                    if (RCL_RET_OK == rclc_executor_init(&executor, &support.context, 3, &allocator))
+                    {
+                        bool executor_ok = true;
+                        executor_ok &= (RCL_RET_OK == rclc_executor_add_timer(&executor, &synchronizeTimer));
+                        executor_ok &= (RCL_RET_OK == rclc_executor_add_timer(&executor, &batteryStateTimer));
+                        executor_ok &= (RCL_RET_OK == rclc_executor_add_timer(&executor, &imuTimer));
+
+                        if (executor_ok)
+                        {
+                            rosInitialized = true;
+                            rosAgentConnected = true;
+                            agentPingAttempts = 0;
+
+                            // Sync time with agent
+                            rmw_uros_sync_session(10);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-void loop() {
-    updateLED();
+void loop()
+{
+    // Update LED based on current status flags
+    ledStatus.update();
     chargingLoop();
 
-    RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100)));
+    delay(10); // Small delay to prevent tight loop
 }
 
-ulong lastChargingLoop = 0;
-void chargingLoop() {
-    auto now = millis();
-    if (now - lastChargingLoop < CHARGING_UPDATE_INTERVAL) {
-        return;
-    }
+// Global variables to store battery status
+float batteryVoltage = 0.0f;
+float chargeCurrent = 0.0f;
+float chargeVoltage = 0.0f;
+bool isChargerPresent = false;
+float batteryPercentage = 0.0f;
+uint8_t powerSupplyStatus = 0;
+uint8_t powerSupplyHealth = 0;
+bool batteryPresent = false;
+bool chargeEnabled = false;
 
+ulong lastChargingLoop = 0;
+
+void manageBatteryCharging()
+{
     uint16_t readFiltered;
 
     readFiltered = batteryVoltageEMA(analogRead(PIN_ANALOG_BATTERY_VOLTAGE));
-    batteryState.voltage = (float) readFiltered
-                           * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
-    readFiltered = chargeCurrentEMA(analogRead(PIN_ANALOG_CHARGE_CURRENT));
-    batteryState.charge = (float) readFiltered
-                          * (3.3f / 4096.0f) / (CURRENT_SENSE_GAIN * R_SHUNT);
+    batteryVoltage = (float)readFiltered * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
 
-    batteryState.present = batteryState.voltage > BATT_PRESENT_VOLTAGE;
+    readFiltered = chargeCurrentEMA(analogRead(PIN_ANALOG_CHARGE_CURRENT));
+    chargeCurrent = (float)readFiltered * (3.3f / 4096.0f) / (CURRENT_SENSE_GAIN * R_SHUNT);
+
+    batteryPresent = batteryVoltage > BATT_PRESENT_VOLTAGE;
 
     readFiltered = chargeVoltageEMA(analogRead(PIN_ANALOG_CHARGE_VOLTAGE));
-    chargeVoltageMsg.data =
-            (float) readFiltered * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
+    chargeVoltage = (float)readFiltered * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
 
-    chargerPresentMsg.data = chargeVoltageMsg.data >= CHARGER_PRESENT_VOLTAGE;
+    isChargerPresent = chargeVoltage >= CHARGER_PRESENT_VOLTAGE;
 
-    batteryState.percentage = std::min(
-        (batteryState.voltage - BATT_EMPTY) / (BATT_FULL - BATT_EMPTY) * 100,
-        100.0f
-    );
+    batteryPercentage = std::min(
+        (batteryVoltage - BATT_EMPTY) / (BATT_FULL - BATT_EMPTY) * 100,
+        100.0f);
 
-    auto shouldCharge = chargeVoltageMsg.data <= CHARGE_VOLTAGE_CUTOFF
-            && batteryState.charge < CHARGE_CURRENT_CUTOFF
-            && batteryState.voltage <= BATT_ABSOLUTE_MAX;
+    bool shouldCharge = chargeVoltage <= CHARGE_VOLTAGE_CUTOFF && chargeCurrent < CHARGE_CURRENT_CUTOFF && batteryVoltage <= BATT_ABSOLUTE_MAX && batteryVoltage;
+    chargeEnabled = shouldCharge && batteryVoltage < BATT_FULL_HYSTERESIS;
 
-    digitalWrite(PIN_ENABLE_CHARGE, shouldCharge ? HIGH : LOW);
+    digitalWrite(PIN_ENABLE_CHARGE, chargeEnabled ? HIGH : LOW);
 
-    auto isCharging = chargeVoltageMsg.data > CHARGE_VOLTAGE_MIN;
+    bool isCharging = chargeVoltage > batteryVoltage;
 
-    batteryState.power_supply_status = shouldCharge
-            ? (isCharging ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_NOT_CHARGING)
-            : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_DISCHARGING;
+    if (shouldCharge)
+    {
+        powerSupplyStatus = isCharging ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_NOT_CHARGING;
+    }
+    else
+    {
+        powerSupplyStatus = sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_DISCHARGING;
+    }
 
-    // assume power supply health based on:
-    // - it's minimum voltage
-    // - it's maximum voltage
-    // - it's presence
-    batteryState.power_supply_health = batteryState.present
-            ? (batteryState.voltage < BATT_ABSOLUTE_MIN
-               ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_DEAD
-               : (batteryState.voltage > BATT_ABSOLUTE_MAX
-                  ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_OVERHEAT
-                  : sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_GOOD))
-            : sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_UNKNOWN;
+    if (batteryPresent)
+    {
+        if (batteryVoltage < BATT_ABSOLUTE_MIN)
+        {
+            powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_DEAD;
+        }
+        else if (batteryVoltage > BATT_ABSOLUTE_MAX)
+        {
+            powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_OVERHEAT;
+        }
+        else
+        {
+            powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_GOOD;
+        }
+    }
+    else
+    {
+        powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_UNKNOWN;
+    }
+}
 
-    digitalWrite(PIN_ENABLE_CHARGE, shouldCharge ? HIGH : LOW);
+void chargingLoop()
+{
+    auto now = millis();
+    if (now - lastChargingLoop < CHARGING_UPDATE_INTERVAL)
+    {
+        return;
+    }
+
+    manageBatteryCharging();
+
+    ledStatus.setFlag(LED_STATUS_CHARGING, chargeEnabled);
+    ledStatus.setFlag(LED_STATUS_DISCHARGING, !isChargerPresent);
+    ledStatus.setFlag(LED_STATUS_BATTERY_LOW, batteryPercentage < 10.0f);
+
+    if (rosInitialized && rosAgentConnected)
+    {
+        batteryState.voltage = batteryVoltage;
+        batteryState.charge = chargeCurrent;
+        batteryState.percentage = batteryPercentage;
+        batteryState.present = batteryPresent;
+        batteryState.power_supply_status = powerSupplyStatus;
+        batteryState.power_supply_health = powerSupplyHealth;
+
+        chargeVoltageMsg.data = chargeVoltage;
+
+        chargerPresentMsg.data = isChargerPresent;
+    }
 
     lastChargingLoop = now;
 }

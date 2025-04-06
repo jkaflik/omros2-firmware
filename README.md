@@ -2,19 +2,32 @@
 
 ## Overview
 
-This is a OpenMower mainboard firmware replacement to work with [OpenMowerROS2](https://jkaflik.github.io/OpenMowerROS2/) alternative ROS software.
+This is a [OpenMower](https://github.com/ClemensElflein/OpenMower) mainboard firmware replacement to work with [OpenMowerROS2](https://jkaflik.github.io/OpenMowerROS2/) alternative ROS software.
 More details about this firmware can be found in [documentation](https://jkaflik.github.io/OpenMowerROS2/omros2-firmware.html).
+
+## Features
+
+- [x] ROS2 node using Micro-ROS
+- [x] Charging
+- [x] LED status
+- [x] IMU
+- [ ] Emergency mode 
 
 ## Build
 
 ### Prepare environment
-By default, Raspberry Pi SWD on a remote Raspberry Pi is configured as the upload & debug protocol.
 
-To use it, you need to install on a target Raspberry Pi an openocd with support for the Raspberry Pi SWD interface.
-Please refer to the [RaspberryPi documentation](https://www.raspberrypi.com/documentation/microcontrollers/debug-probe.html#linux-and-raspberry-pi) for more information.
+> [!IMPORTANT]
+> This firmware is meant to be run on a [OpenMower](https://github.com/ClemensElflein/OpenMower) hardware or compatible.
 
-On the hardware side, you need to connect the Raspberry Pi SWD interface to the target SWD interface.
-Luckily, on the OpenMower mainboard there is are circuits to do so. All you have to do is to use 4 jumpers on J22.
+Firmware is build against a RP2040 chip only using PlatformIO.
+Default target is a remotely run OpenOCD with a Pico board as a SWD target.
+Everything should work out of the box. Make sure your `--upload-port` is your Raspberry Pi host. (one used for the OpenMower)
+
+> [!NOTE]
+> Only Raspberry Pi5 is supported. OpenOCD configuration is crafted for it. If you want to use another board, see older commits in this repository.
+
+On the hardware side, you need to connect the Raspberry Pi SWD interface to the target SWD interface. Luckily, on the OpenMower mainboard there is are circuits to do so. All you have to do is to use 4 jumpers on J22.
 
 ![J22](docs/openmower_j22_swd.png)
 
