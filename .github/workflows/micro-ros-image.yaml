@@ -46,7 +46,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          file: .github/microros/Dockerfile
+          file: .github/micro-ros/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:micro-ros
