@@ -42,10 +42,5 @@ platformio run -t upload
 
 ## Debugging
 
-Since I haven't managed PlatformIO to run my command beforehand, you need to run it manually:
-
-```bash
-scp ./utils/remote-openocd.sh openmower.local:/tmp/remote-openocd.sh && ssh openmower.local /tmp/remote-openocd.sh debug
-```
-
-Then you can run debugging session in your IDE. (VSCode or CLion)
+Use your IDE integration to debug the code. You can use `pio debug` command as well.
+This will run the same bash script as in the upload command, but it will not upload the firmware. You can use `pio debug -t upload` to upload the firmware and start debugging.
