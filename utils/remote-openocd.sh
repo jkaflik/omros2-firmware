@@ -65,11 +65,19 @@ EOF
 killall openocd >/dev/null || true
 openocdConfig
 
+# set 23 pin to output high - Pico's RUN
+pinctrl set 23 op dh
+
 if [ "$action" == "flash" ]; then
     echo "Flashing firmware from $firmware_path..."
     /usr/local/bin/openocd \
         -f /tmp/openocd.cfg \
         -c "program $firmware_path verify reset exit"
+
+    # It happens OpenOCD doesn't do a proper target reset
+    pinctrl set 23 op dl
+    sleep 0.1
+    pinctrl set 23 op dh
 fi
 
 if [ "$action" == "debug" ]; then

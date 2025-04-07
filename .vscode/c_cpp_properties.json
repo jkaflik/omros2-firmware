@@ -305,6 +305,8 @@
                 "USBD_MAX_POWER_MA=500",
                 "HW_0_13_X",
                 "PIO_FRAMEWORK_ARDUINO_NO_USB",
+                "RMW_UXRCE_ENTITY_CREATION_DESTROY_TIMEOUT=0",
+                "UCLIENT_MAX_SESSION_CONNECTION_ATTEMPTS=3",
                 "ARDUINO=10810",
                 "ARDUINO_ARCH_RP2040",
                 "F_CPU=133000000L",
