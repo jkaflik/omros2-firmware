@@ -19,3 +19,6 @@ agent:
 
 agent_remote:
 	@ssh -t $(REMOTE) bash -s $(MICRO_ROS_DEVICE) < ./utils/run-micro-ros-agent.sh 
+
+agent_remote_shell:
+	@ssh -t $(REMOTE) bash < ./utils/exec-in-micro-ros-agent.sh 
