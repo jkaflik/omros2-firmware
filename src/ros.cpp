@@ -16,7 +16,7 @@ Support::Support() : state_(State::WAITING_AGENT)
 
 Support::~Support()
 {
-  cleanup_entities();  // Renamed from destroy_entities
+  cleanup_entities();
 }
 
 rcl_context_t* Support::get_context()
@@ -137,10 +137,8 @@ void TimerBase::set_timer_user_ptr(rcl_timer_t* timer, void* user_ptr)
   timer_user_data[timer] = user_ptr;
 }
 
-// Static timer callback function that redirects to the TimerBase instance
 void timer_callback(rcl_timer_t* timer, int64_t last_call_time)
 {
-  // Get the TimerBase instance from our map
   TimerBase* timer_obj = static_cast<TimerBase*>(TimerBase::get_timer_user_ptr(timer));
   if (timer_obj != nullptr)
   {
@@ -155,7 +153,6 @@ void TimerBase::cleanup()
     rcl_ret_t ret = rcl_timer_fini(&timer_);
     (void)ret;  // Suppress warning
 
-    // Also clean up the clock if it exists
     if (clock_ != nullptr)
     {
       rcl_ret_t clock_ret = rcl_clock_fini(clock_);
@@ -164,7 +161,6 @@ void TimerBase::cleanup()
       clock_ = nullptr;
     }
 
-    // Remove from map
     timer_user_data.erase(&timer_);
     initialized_ = false;
   }
@@ -199,11 +195,9 @@ bool Timer::initialize()
     return false;
   }
 
-  // Get a clock from context
   rcl_context_t* context = node_.get_support().get_context();
   rcl_allocator_t allocator = rcl_get_default_allocator();
 
-  // Create the clock
   rcl_clock_type_t clock_type = RCL_STEADY_TIME;
   clock_ = new rcl_clock_t;  // Store in the base class member
   rcl_ret_t ret = rcl_clock_init(clock_type, clock_, &allocator);
@@ -214,14 +208,8 @@ bool Timer::initialize()
     return false;
   }
 
-  // Use rcl_timer_init2 as rcl_timer_init is deprecated
-  ret = rcl_timer_init2(&timer_,
-                        clock_,
-                        context,
-                        RCL_MS_TO_NS(period_ms_),  // Convert ms to nanoseconds
-                        timer_callback,
-                        allocator,
-                        true);
+  ret = rcl_timer_init2(
+    &timer_, clock_, context, RCL_MS_TO_NS(period_ms_), timer_callback, allocator, true);
 
   if (ret != RCL_RET_OK)
   {
@@ -232,10 +220,8 @@ bool Timer::initialize()
     return false;
   }
 
-  // Store this object's pointer in our map
   set_timer_user_ptr(&timer_, this);
 
-  // Add the timer to the executor
   ret = rclc_executor_add_timer(node_.get_support().get_executor(), &timer_);
   initialized_ = (ret == RCL_RET_OK);
 
@@ -244,7 +230,6 @@ bool Timer::initialize()
 
 void Timer::callback()
 {
-  // Call the user's callback function
   if (callback_)
   {
     callback_();
@@ -282,17 +267,14 @@ Node::Node(Support& support, const char* name, const char* namespace_)
 
 Node::~Node()
 {
-  // Clean up ROS resources
   cleanup();
 
-  // Clean up memory for timers
   for (auto* timer : timers_)
   {
     delete timer;
   }
   timers_.clear();
 
-  // Clean up memory for publishers
   for (auto* publisher : publishers_)
   {
     delete publisher;
@@ -304,19 +286,16 @@ void Node::cleanup()
 {
   if (initialized_)
   {
-    // Clean up all publishers first
     for (auto* publisher : publishers_)
     {
       publisher->cleanup();
     }
 
-    // Clean up all timers
     for (auto* timer : timers_)
     {
       timer->cleanup();
     }
 
-    // Finally clean up the node itself
     rcl_ret_t ret = rcl_node_fini(&node_);
     (void)ret;  // Suppress warning
     initialized_ = false;
@@ -332,7 +311,6 @@ void Node::add_timer(TimerBase* timer)
 {
   timers_.push_back(timer);
 
-  // If node is already initialized, initialize the timer right away
   if (initialized_)
   {
     timer->initialize();
@@ -359,7 +337,6 @@ void Node::add_publisher(PublisherBase* publisher)
 {
   publishers_.push_back(publisher);
 
-  // If node is already initialized, initialize the publisher right away
   if (initialized_)
   {
     publisher->initialize();
@@ -400,7 +377,6 @@ bool Node::initialize()
 
   initialized_ = true;
 
-  // Initialize node's entities
   bool timers_ok = initialize_timers();
   bool publishers_ok = initialize_publishers();
 

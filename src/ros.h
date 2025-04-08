@@ -56,6 +56,13 @@ class Node;
 class TimerBase;
 class PublisherBase;
 
+/**
+ * @brief Support class that manages ROS 2 resources for microROS.
+ *
+ * This class handles initialization and management of ROS 2 entities including
+ * the context, allocator, support structure and executor. It serves as the central
+ * point for managing nodes and providing access to shared ROS 2 resources.
+ */
 class Support
 {
 public:
@@ -68,7 +75,6 @@ public:
 
   // Register a node with this support instance
   void register_node(Node* node);
-
   // Access to context for timer initialization
   rcl_context_t* get_context();
   // Access to executor for adding timers
@@ -87,6 +93,16 @@ private:
   friend class Node;
 };
 
+/**
+ * @brief Base class for timer implementations in the ROS 2 system.
+ *
+ * TimerBase provides a foundation for creating periodic timers that execute callbacks
+ * at specified intervals. This is an abstract class that requires derived classes to
+ * implement the initialization logic and callback functionality.
+ *
+ * @note Timer objects must be initialized before use and should be cleaned up when no longer
+ * needed.
+ */
 class TimerBase
 {
 public:
@@ -118,6 +134,16 @@ protected:
   friend class Support;
 };
 
+/**
+ * @brief Base class for ROS2 publishers.
+ *
+ * This abstract class provides the common functionality and interface for all publishers
+ * in the system. It manages the underlying rcl_publisher_t resource and provides
+ * initialization, cleanup, and status checking methods.
+ *
+ * Derived classes must implement the initialize() method to configure their specific
+ * message type and publisher settings.
+ */
 class PublisherBase
 {
 public:
@@ -143,6 +169,13 @@ protected:
   friend class Support;
 };
 
+/**
+ * @brief A ROS2 Node implementation.
+ *
+ * This class represents a ROS2 node, which is a fundamental element in the ROS2 architecture.
+ * It provides functionality for initialization, cleanup, and managing node entities such as
+ * timers and publishers.
+ */
 class Node
 {
 public:
@@ -192,7 +225,13 @@ private:
   friend class TimerBase;
 };
 
-// Timer implementation with std::function callback
+/**
+ * @brief A timer class that executes a user-defined callback at regular intervals.
+ *
+ * Timer extends TimerBase and provides a convenient way to schedule periodic tasks
+ * with a std::function callback. The timer is associated with a Node and executes
+ * the callback at the specified interval.
+ */
 class Timer : public TimerBase
 {
 public:
@@ -208,8 +247,20 @@ private:
   CallbackType callback_;
 };
 
-// Publisher implementation for specific message types
 template <typename MessageT>
+/**
+ * @brief A templated ROS 2 publisher class to publish specific message types.
+ *
+ * The Publisher class provides functionality to create and manage a ROS 2 publisher
+ * for a specific message type. It handles message initialization, publication,
+ * and proper cleanup of resources.
+ *
+ * @tparam MessageT The ROS 2 message type that this publisher will publish.
+ *
+ * @note This class inherits from PublisherBase and implements its virtual functions.
+ * @note The publisher is not initialized upon construction. You must call initialize()
+ *       before publishing messages.
+ */
 class Publisher : public PublisherBase
 {
 public:
