@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <rcutils/allocator.h>
 
-// Store timer objects in a map to avoid accessing impl directly
 #include <unordered_map>
 static std::unordered_map<const rcl_timer_t*, void*> timer_user_data;
 
@@ -36,12 +35,9 @@ bool Support::create_entities()
 
   RCCHECK(rclc_support_init(&support_, 0, NULL, &allocator_));
 
-  // Create a larger executor to accommodate timers
   executor_ = rclc_executor_get_zero_initialized_executor();
-  // Increased size to handle multiple timers
   RCCHECK(rclc_executor_init(&executor_, &support_.context, 10, &allocator_));
 
-  // Initialize all registered nodes
   for (auto* node : nodes_)
   {
     rcl_node_t* handle = node->get_handle();
@@ -49,7 +45,6 @@ bool Support::create_entities()
       handle, node->node_name_.c_str(), node->node_namespace_.c_str(), &support_));
     node->initialized_ = true;
 
-    // Initialize timers and publishers for this node
     node->initialize_timers();
     node->initialize_publishers();
   }
@@ -64,11 +59,40 @@ void Support::destroy_entities()
 
   rclc_executor_fini(&executor_);
 
-  // Finalize all nodes
   for (auto* node : nodes_)
   {
     if (node->initialized_)
     {
+      for (auto* publisher : node->publishers_)
+      {
+        if (publisher->initialized_)
+        {
+          rcl_ret_t pub_ret = rcl_publisher_fini(&publisher->publisher_, node->get_handle());
+          (void)pub_ret;  // Suppress warning
+          publisher->initialized_ = false;
+        }
+      }
+
+      for (auto* timer : node->timers_)
+      {
+        if (timer->initialized_)
+        {
+          rcl_ret_t timer_ret = rcl_timer_fini(&timer->timer_);
+          (void)timer_ret;  // Suppress warning
+
+          if (timer->clock_ != nullptr)
+          {
+            rcl_ret_t clock_fini_ret = rcl_clock_fini(timer->clock_);
+            (void)clock_fini_ret;  // Suppress warning
+            delete timer->clock_;
+            timer->clock_ = nullptr;
+          }
+
+          timer_user_data.erase(&timer->timer_);
+          timer->initialized_ = false;
+        }
+      }
+
       rcl_ret_t ret = rcl_node_fini(&node->node_);
       (void)ret;  // Suppress warning
       node->initialized_ = false;
@@ -160,7 +184,7 @@ void timer_callback(rcl_timer_t* timer, int64_t last_call_time)
 }
 
 TimerBase::TimerBase(Node& node, uint32_t period_ms)
-  : node_(node), period_ms_(period_ms), initialized_(false)
+  : node_(node), period_ms_(period_ms), initialized_(false), clock_(nullptr)
 {
   timer_ = rcl_get_zero_initialized_timer();
   node.add_timer(this);
@@ -172,6 +196,15 @@ TimerBase::~TimerBase()
   {
     rcl_ret_t ret = rcl_timer_fini(&timer_);
     (void)ret;  // Suppress warning
+
+    // Also clean up the clock if it exists
+    if (clock_ != nullptr)
+    {
+      rcl_ret_t clock_ret = rcl_clock_fini(clock_);
+      (void)clock_ret;  // Suppress warning
+      delete clock_;
+      clock_ = nullptr;
+    }
 
     // Remove from map
     timer_user_data.erase(&timer_);
@@ -201,17 +234,18 @@ bool Timer::initialize()
 
   // Create the clock
   rcl_clock_type_t clock_type = RCL_STEADY_TIME;
-  rcl_clock_t* clock = new rcl_clock_t;
-  rcl_ret_t ret = rcl_clock_init(clock_type, clock, &allocator);
+  clock_ = new rcl_clock_t;  // Store in the base class member
+  rcl_ret_t ret = rcl_clock_init(clock_type, clock_, &allocator);
   if (ret != RCL_RET_OK)
   {
-    delete clock;
+    delete clock_;
+    clock_ = nullptr;
     return false;
   }
 
   // Use rcl_timer_init2 as rcl_timer_init is deprecated
   ret = rcl_timer_init2(&timer_,
-                        clock,
+                        clock_,
                         context,
                         RCL_MS_TO_NS(period_ms_),  // Convert ms to nanoseconds
                         timer_callback,
@@ -220,9 +254,10 @@ bool Timer::initialize()
 
   if (ret != RCL_RET_OK)
   {
-    rcl_ret_t fini_ret = rcl_clock_fini(clock);
+    rcl_ret_t fini_ret = rcl_clock_fini(clock_);
     (void)fini_ret;  // Suppress warning
-    delete clock;
+    delete clock_;
+    clock_ = nullptr;
     return false;
   }
 

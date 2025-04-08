@@ -13,5 +13,6 @@
         "*.tcc": "cpp"
     },
     "C_Cpp.default.cppStandard": "c++14",
-    "C_Cpp.default.cStandard": "c11"
+    "C_Cpp.default.cStandard": "c11",
+    "makefile.configureOnOpen": false
 }

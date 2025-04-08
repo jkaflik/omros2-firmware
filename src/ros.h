@@ -109,6 +109,7 @@ protected:
   uint32_t period_ms_;
   bool initialized_;
   rcl_timer_t timer_;
+  rcl_clock_t* clock_ = nullptr;  // Store the clock pointer
 
   friend class Node;
   friend class Support;
@@ -130,8 +131,10 @@ protected:
   Node& node_;
   std::string topic_name_;
   bool initialized_;
+  rcl_publisher_t publisher_;  // Added publisher_ to the base class
 
   friend class Node;
+  friend class Support;
 };
 
 class Node
@@ -262,7 +265,6 @@ public:
   }
 
 private:
-  rcl_publisher_t publisher_;
   MessageT message_;
   const rosidl_message_type_support_t* type_support_;
   rmw_qos_profile_t qos_profile_;
