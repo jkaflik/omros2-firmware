@@ -1,5 +1,18 @@
 {
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "C_Cpp.clang_format_style": "file",
+    "C_Cpp.formatting": "clangFormat",
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
     "files.associations": {
+        "*.h": "cpp",
+        "*.hpp": "cpp",
+        "*.cpp": "cpp",
+        "*.cc": "cpp",
         "*.tcc": "cpp"
-    }
+    },
+    "C_Cpp.default.cppStandard": "c++14",
+    "C_Cpp.default.cStandard": "c11",
+    "makefile.configureOnOpen": false
 }

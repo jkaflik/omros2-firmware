@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Platform.IO environment
         shell: bash
         run: |
@@ -22,7 +22,7 @@ jobs:
           export PATH=$PATH:~/.platformio/penv/bin/
           pio run -v
       - name: Archive firmware.uf2
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: firmware.uf2
           path: .pio/build/default/firmware.uf2

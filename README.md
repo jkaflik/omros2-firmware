@@ -8,10 +8,31 @@ More details about this firmware can be found in [documentation](https://jkaflik
 ## Features
 
 - [x] ROS2 node using Micro-ROS
+  - [x] Auto-reconnect
+  - [x] Power-related publishers
+  - [x] IMU publisher
 - [x] Charging
 - [x] LED status
 - [x] IMU
-- [ ] Emergency mode 
+- [ ] Emergency mode
+  - [ ] Emergency publisher
+  - [ ] Emergency restart service
+- [ ] Cover panel support
+
+## Usage
+
+### LED Status Indicators
+
+The firmware uses onboard NeoPixel LED(s) to display the current system status. Multiple status conditions can be active simultaneously and will be displayed in sequence.
+
+**LED Status Colors:**
+- **Green**: ROS connected
+- **Yellow**: Battery charging
+- **Magenta**: Battery discharging
+- **Red**: Battery low
+- **Blue**: IMU sensor failure
+
+When multiple statuses are active, each status will be shown for approximately 800ms with a 200ms black separator between them. The sequence will continue to cycle through all active statuses.
 
 ## Build
 
@@ -44,3 +65,17 @@ platformio run -t upload
 
 Use your IDE integration to debug the code. You can use `pio debug` command as well.
 This will run the same bash script as in the upload command, but it will not upload the firmware. You can use `pio debug -t upload` to upload the firmware and start debugging.
+
+## Micro-ROS agent for testing
+
+You can use the Micro-ROS agent container to test the firmware. To run it a remote RaspberryPi device run the following command: 
+
+```bash
+make agent_remote
+```
+
+If you have an access to the Pico's UART0 directly on your host machine run:
+
+```bash
+make agent MICRO_ROS_DEVICE=/dev/ttyAMA0
+```
