@@ -75,8 +75,8 @@ public:
   rclc_executor_t* get_executor();
 
 private:
-  bool create_entities();
-  void destroy_entities();
+  bool initialize_entities();
+  void cleanup_entities();
 
   State state_;
   rcl_allocator_t allocator_;
@@ -99,6 +99,9 @@ public:
   {
     return initialized_;
   }
+
+  // Cleanup resources
+  void cleanup();
 
   // Store the timer instance pointer separately
   static void* get_timer_user_ptr(const rcl_timer_t* timer);
@@ -127,11 +130,14 @@ public:
     return initialized_;
   }
 
+  // Cleanup resources
+  void cleanup();
+
 protected:
   Node& node_;
   std::string topic_name_;
   bool initialized_;
-  rcl_publisher_t publisher_;  // Added publisher_ to the base class
+  rcl_publisher_t publisher_;
 
   friend class Node;
   friend class Support;
@@ -149,6 +155,9 @@ public:
     return initialized_;
   }
 
+  // Initialize node and its entities
+  bool initialize();
+
   // Add a timer to this node
   void add_timer(TimerBase* timer);
 
@@ -160,6 +169,9 @@ public:
 
   // Initialize publishers if node is ready
   bool initialize_publishers();
+
+  // Cleanup node resources
+  void cleanup();
 
   // Access to support
   Support& get_support()
@@ -214,11 +226,7 @@ public:
 
   ~Publisher() override
   {
-    if (initialized_)
-    {
-      rcl_ret_t ret = rcl_publisher_fini(&publisher_, node_.get_handle());
-      (void)ret;  // Suppress warning
-    }
+    cleanup();
   }
 
   bool initialize() override

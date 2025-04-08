@@ -16,7 +16,7 @@ Support::Support() : state_(State::WAITING_AGENT)
 
 Support::~Support()
 {
-  destroy_entities();
+  cleanup_entities();  // Renamed from destroy_entities
 }
 
 rcl_context_t* Support::get_context()
@@ -29,7 +29,7 @@ rclc_executor_t* Support::get_executor()
   return &executor_;
 }
 
-bool Support::create_entities()
+bool Support::initialize_entities()
 {
   allocator_ = rcl_get_default_allocator();
 
@@ -40,19 +40,16 @@ bool Support::create_entities()
 
   for (auto* node : nodes_)
   {
-    rcl_node_t* handle = node->get_handle();
-    RCCHECK(rclc_node_init_default(
-      handle, node->node_name_.c_str(), node->node_namespace_.c_str(), &support_));
-    node->initialized_ = true;
-
-    node->initialize_timers();
-    node->initialize_publishers();
+    if (!node->initialize())
+    {
+      return false;
+    }
   }
 
   return true;
 }
 
-void Support::destroy_entities()
+void Support::cleanup_entities()
 {
   rmw_context_t* rmw_context = rcl_context_get_rmw_context(&support_.context);
   (void)rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
@@ -63,39 +60,7 @@ void Support::destroy_entities()
   {
     if (node->initialized_)
     {
-      for (auto* publisher : node->publishers_)
-      {
-        if (publisher->initialized_)
-        {
-          rcl_ret_t pub_ret = rcl_publisher_fini(&publisher->publisher_, node->get_handle());
-          (void)pub_ret;  // Suppress warning
-          publisher->initialized_ = false;
-        }
-      }
-
-      for (auto* timer : node->timers_)
-      {
-        if (timer->initialized_)
-        {
-          rcl_ret_t timer_ret = rcl_timer_fini(&timer->timer_);
-          (void)timer_ret;  // Suppress warning
-
-          if (timer->clock_ != nullptr)
-          {
-            rcl_ret_t clock_fini_ret = rcl_clock_fini(timer->clock_);
-            (void)clock_fini_ret;  // Suppress warning
-            delete timer->clock_;
-            timer->clock_ = nullptr;
-          }
-
-          timer_user_data.erase(&timer->timer_);
-          timer->initialized_ = false;
-        }
-      }
-
-      rcl_ret_t ret = rcl_node_fini(&node->node_);
-      (void)ret;  // Suppress warning
-      node->initialized_ = false;
+      node->cleanup();
     }
   }
 
@@ -118,10 +83,10 @@ void Support::spin()
                                     : State::WAITING_AGENT;);
       break;
     case State::AGENT_AVAILABLE:
-      state_ = (true == create_entities()) ? State::AGENT_CONNECTED : State::WAITING_AGENT;
+      state_ = (true == initialize_entities()) ? State::AGENT_CONNECTED : State::WAITING_AGENT;
       if (state_ == State::WAITING_AGENT)
       {
-        destroy_entities();
+        cleanup_entities();
       };
 
       rmw_uros_sync_session(1000);  // ms
@@ -138,7 +103,7 @@ void Support::spin()
       }
       break;
     case State::AGENT_DISCONNECTED:
-      destroy_entities();
+      cleanup_entities();
       state_ = State::WAITING_AGENT;
       break;
     default:
@@ -183,14 +148,7 @@ void timer_callback(rcl_timer_t* timer, int64_t last_call_time)
   }
 }
 
-TimerBase::TimerBase(Node& node, uint32_t period_ms)
-  : node_(node), period_ms_(period_ms), initialized_(false), clock_(nullptr)
-{
-  timer_ = rcl_get_zero_initialized_timer();
-  node.add_timer(this);
-}
-
-TimerBase::~TimerBase()
+void TimerBase::cleanup()
 {
   if (initialized_)
   {
@@ -208,7 +166,20 @@ TimerBase::~TimerBase()
 
     // Remove from map
     timer_user_data.erase(&timer_);
+    initialized_ = false;
   }
+}
+
+TimerBase::TimerBase(Node& node, uint32_t period_ms)
+  : node_(node), period_ms_(period_ms), initialized_(false), clock_(nullptr)
+{
+  timer_ = rcl_get_zero_initialized_timer();
+  node.add_timer(this);
+}
+
+TimerBase::~TimerBase()
+{
+  cleanup();
 }
 
 Timer::Timer(Node& node, uint32_t period_ms, CallbackType callback)
@@ -280,15 +251,26 @@ void Timer::callback()
   }
 }
 
+void PublisherBase::cleanup()
+{
+  if (initialized_)
+  {
+    rcl_ret_t ret = rcl_publisher_fini(&publisher_, node_.get_handle());
+    (void)ret;  // Suppress warning
+    initialized_ = false;
+  }
+}
+
 PublisherBase::PublisherBase(Node& node, const char* topic_name)
   : node_(node), topic_name_(topic_name), initialized_(false)
 {
+  publisher_ = rcl_get_zero_initialized_publisher();
   node.add_publisher(this);
 }
 
 PublisherBase::~PublisherBase()
 {
-  // Specific cleanup handled by derived classes
+  cleanup();
 }
 
 Node::Node(Support& support, const char* name, const char* namespace_)
@@ -300,21 +282,45 @@ Node::Node(Support& support, const char* name, const char* namespace_)
 
 Node::~Node()
 {
-  // Clean up all timers
+  // Clean up ROS resources
+  cleanup();
+
+  // Clean up memory for timers
   for (auto* timer : timers_)
   {
     delete timer;
   }
   timers_.clear();
 
-  // Clean up all publishers
+  // Clean up memory for publishers
   for (auto* publisher : publishers_)
   {
     delete publisher;
   }
   publishers_.clear();
+}
 
-  // The support class will handle node finalization
+void Node::cleanup()
+{
+  if (initialized_)
+  {
+    // Clean up all publishers first
+    for (auto* publisher : publishers_)
+    {
+      publisher->cleanup();
+    }
+
+    // Clean up all timers
+    for (auto* timer : timers_)
+    {
+      timer->cleanup();
+    }
+
+    // Finally clean up the node itself
+    rcl_ret_t ret = rcl_node_fini(&node_);
+    (void)ret;  // Suppress warning
+    initialized_ = false;
+  }
 }
 
 rcl_node_t* Node::get_handle()
@@ -374,6 +380,31 @@ bool Node::initialize_publishers()
   }
 
   return success;
+}
+
+bool Node::initialize()
+{
+  if (initialized_)
+  {
+    return true;  // Already initialized
+  }
+
+  rcl_node_t* handle = get_handle();
+  rcl_ret_t ret =
+    rclc_node_init_default(handle, node_name_.c_str(), node_namespace_.c_str(), &support_.support_);
+
+  if (ret != RCL_RET_OK)
+  {
+    return false;
+  }
+
+  initialized_ = true;
+
+  // Initialize node's entities
+  bool timers_ok = initialize_timers();
+  bool publishers_ok = initialize_publishers();
+
+  return timers_ok && publishers_ok;
 }
 
 }  // namespace uros
