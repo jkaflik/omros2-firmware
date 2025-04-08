@@ -9,12 +9,15 @@ More details about this firmware can be found in [documentation](https://jkaflik
 
 - [x] ROS2 node using Micro-ROS
   - [x] Auto-reconnect
-  - [ ] Power-related publishers
-  - [ ] IMU publisher
+  - [x] Power-related publishers
+  - [x] IMU publisher
 - [x] Charging
 - [x] LED status
 - [x] IMU
-- [ ] Emergency mode 
+- [ ] Emergency mode
+  - [ ] Emergency publisher
+  - [ ] Emergency restart service
+- [ ] Cover panel support
 
 ## Usage
 
