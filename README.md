@@ -14,9 +14,9 @@ More details about this firmware can be found in [documentation](https://jkaflik
 - [x] Charging
 - [x] LED status
 - [x] IMU
-- [ ] Emergency mode
-  - [ ] Emergency publisher
-  - [ ] Emergency restart service
+- [x] Emergency mode
+  - [x] Emergency publishers
+  - [x] Latched emergency command topic
 - [ ] Cover panel support
 
 ## Usage
@@ -31,8 +31,42 @@ The firmware uses onboard NeoPixel LED(s) to display the current system status. 
 - **Magenta**: Battery discharging
 - **Red**: Battery low
 - **Blue**: IMU sensor failure
+- **Blinking red**: Emergency latch active
 
 When multiple statuses are active, each status will be shown for approximately 800ms with a 200ms black separator between them. The sequence will continue to cycle through all active statuses.
+Emergency has priority over the normal status sequence and is shown as a blinking red LED.
+
+### Emergency ROS API
+
+Emergency state is published at 10 Hz:
+
+| Topic | Type | Description |
+| --- | --- | --- |
+| `emergency/status` | `omros2_firmware_msgs/msg/EmergencyStatus` | Combined emergency status. |
+
+`EmergencyStatus` fields:
+
+| Field | Description |
+| --- | --- |
+| `active` | Emergency latch is active. |
+| `stop_active` | Stop input is active after debounce. |
+| `lift_active` | Lift emergency is active. |
+| `tilt_active` | Tilt emergency is active. |
+| `software_requested` | Emergency was requested by ROS. |
+| `release_blocked` | Release is blocked by an active physical input. |
+| `lifted_wheels` | Number of active lift inputs. |
+
+Commands are accepted on `emergency/command` as `std_msgs/msg/Bool`:
+
+| Value | Meaning |
+| --- | --- |
+| `true` | Request/latch emergency. |
+| `false` | Request emergency release. |
+
+The same command value must be received three times within one second before it is accepted.
+Release requests are ignored while any physical stop/lift/tilt input is active.
+The emergency latch starts inactive after boot when physical inputs are clear.
+Physical stop/lift/tilt inputs and `emergency/command=true` latch emergency explicitly.
 
 ## Build
 
@@ -79,3 +113,18 @@ If you have an access to the Pico's UART0 directly on your host machine run:
 ```bash
 make agent MICRO_ROS_DEVICE=/dev/ttyAMA0
 ```
+
+## Hardware-in-the-loop tests
+
+The emergency feature has an interactive ROS 2 hardware test for real OpenMower hardware.
+Run it with flashed firmware and a running micro-ROS agent:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths extra_packages --build-base build/hil --install-base install/hil
+source install/hil/setup.bash
+python3 test/hil/emergency_interactive.py
+```
+
+The test guides the operator through pressing STOP, activating one lift sensor, and activating two lift sensors. It verifies the published emergency status and the three-message command confirmation rule.
+The test is rerunnable on the same firmware boot; if the emergency latch is inactive at the start, the script reports that expected state and latches before checks that require an active latch.

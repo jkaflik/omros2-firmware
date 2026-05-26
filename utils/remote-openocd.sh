@@ -32,16 +32,22 @@ if ! groups | grep -q "gpio"; then
     exit 1
 fi
 
-if ! command -v /usr/local/bin/openocd &>/dev/null; then
-    echo "openocd could not be found, installing it now..."
+function openocdSupportsLinuxGpiod() {
+    command -v /usr/local/bin/openocd &>/dev/null && \
+        /usr/local/bin/openocd -c "adapter driver linuxgpiod" -c "exit" &>/dev/null
+}
+
+if ! openocdSupportsLinuxGpiod; then
+    echo "openocd with linuxgpiod support could not be found, installing it now..."
 
     sudo apt-get update >/dev/null
-    sudo apt-get install -y libtool libjim-dev
+    sudo apt-get install -y libtool libjim-dev libgpiod-dev pkg-config
 
-    git clone git@github.com:openocd-org/openocd.git
+    rm -rf openocd
+    git clone https://github.com/openocd-org/openocd.git
     cd openocd
     ./bootstrap
-    ./configure --disable-werror
+    ./configure --disable-werror --enable-linuxgpiod
     make -j4
     sudo make install
 fi

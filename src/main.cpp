@@ -4,12 +4,14 @@
 #include <Arduino.h>
 #include <EMA.h>
 #include <micro_ros_platformio.h>
+#include <omros2_firmware_msgs/msg/emergency_status.h>
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
 #include <sensor_msgs/msg/battery_state.h>
 #include <sensor_msgs/msg/imu.h>
 
+#include "emergency.h"
 #include "hardware.h"
 #include "imu.h"
 #include "led_status.hpp"
@@ -140,9 +142,6 @@ void setup1()
 
   support = new uros::Support();
   auto node = new uros::Node(*support, "openmower_mainboard");
-  auto randomNumberPublisher = new uros::Publisher<std_msgs__msg__Float32>(
-    *node, "random_number", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32));
-
   auto imuPublisher = new uros::Publisher<sensor_msgs__msg__Imu>(
     *node, "imu/data_raw", UROS_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu));
   auto imuTimer = new uros::Timer(*node,
@@ -169,44 +168,64 @@ void setup1()
 
   auto batteryStatePublisher = new uros::Publisher<sensor_msgs__msg__BatteryState>(
     *node, "power", UROS_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState));
-  auto batteryStateTimer = new uros::Timer(*node,
-                                           1000,
-                                           [batteryStatePublisher]()
-                                           {
-                                             auto& msg = batteryStatePublisher->get_message();
-
-                                             auto ns = rmw_uros_epoch_nanos();
-                                             msg.header.stamp.sec = ns / 1000000000;
-                                             msg.header.stamp.nanosec = ns % 1000000000;
-                                             msg.voltage = batteryVoltage;
-                                             msg.charge = chargeCurrent;
-                                             msg.percentage = batteryPercentage;
-                                             msg.present = batteryPresent;
-                                             msg.power_supply_status = powerSupplyStatus;
-                                             msg.power_supply_health = powerSupplyHealth;
-
-                                             batteryStatePublisher->publish();
-                                           });
   auto chargeVoltagePublisher = new uros::Publisher<std_msgs__msg__Float32>(
     *node, "power/charge_voltage", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32));
-  auto chargeVoltageTimer = new uros::Timer(*node,
-                                            1000,
-                                            [chargeVoltagePublisher]()
-                                            {
-                                              auto& msg = chargeVoltagePublisher->get_message();
-                                              msg.data = chargeVoltage;
-                                              chargeVoltagePublisher->publish();
-                                            });
   auto chargerPresentPublisher = new uros::Publisher<std_msgs__msg__Bool>(
     *node, "power/charger_present", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto chargerPresentTimer = new uros::Timer(*node,
-                                             1000,
-                                             [chargerPresentPublisher]()
-                                             {
-                                               auto& msg = chargerPresentPublisher->get_message();
-                                               msg.data = isChargerPresent;
-                                               chargerPresentPublisher->publish();
-                                             });
+  auto powerTimer = new uros::Timer(
+    *node,
+    1000,
+    [batteryStatePublisher, chargeVoltagePublisher, chargerPresentPublisher]()
+    {
+      auto& batteryMsg = batteryStatePublisher->get_message();
+
+      auto ns = rmw_uros_epoch_nanos();
+      batteryMsg.header.stamp.sec = ns / 1000000000;
+      batteryMsg.header.stamp.nanosec = ns % 1000000000;
+      batteryMsg.voltage = batteryVoltage;
+      batteryMsg.charge = chargeCurrent;
+      batteryMsg.percentage = batteryPercentage;
+      batteryMsg.present = batteryPresent;
+      batteryMsg.power_supply_status = powerSupplyStatus;
+      batteryMsg.power_supply_health = powerSupplyHealth;
+      batteryStatePublisher->publish();
+
+      auto& chargeVoltageMsg = chargeVoltagePublisher->get_message();
+      chargeVoltageMsg.data = chargeVoltage;
+      chargeVoltagePublisher->publish();
+
+      auto& chargerPresentMsg = chargerPresentPublisher->get_message();
+      chargerPresentMsg.data = isChargerPresent;
+      chargerPresentPublisher->publish();
+    });
+
+  auto emergencyCommandSubscription = new uros::Subscriber<std_msgs__msg__Bool>(
+    *node,
+    "emergency/command",
+    UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+    [](const std_msgs__msg__Bool& msg) { emergency::handleCommand(msg.data); });
+
+  auto emergencyStatusPublisher = new uros::Publisher<omros2_firmware_msgs__msg__EmergencyStatus>(
+    *node,
+    "emergency/status",
+    UROS_GET_MSG_TYPE_SUPPORT(omros2_firmware_msgs, msg, EmergencyStatus));
+  auto emergencyTimer = new uros::Timer(
+    *node,
+    100,
+    [emergencyStatusPublisher]()
+    {
+      auto state = emergency::getState();
+      auto& msg = emergencyStatusPublisher->get_message();
+
+      msg.active = state.active;
+      msg.stop_active = state.stop_active;
+      msg.lift_active = state.lift_active;
+      msg.tilt_active = state.tilt_active;
+      msg.software_requested = state.software_requested;
+      msg.release_blocked = state.release_blocked;
+      msg.lifted_wheels = state.lifted_wheels;
+      emergencyStatusPublisher->publish();
+    });
 
   isSecondCoreSetupDone = true;
 }
@@ -216,6 +235,7 @@ void loop1()
   support->spin();
 
   ledStatus.setFlag(LED_STATUS_ROS_CONNECTED, support->get_state() == uros::State::AGENT_CONNECTED);
+  ledStatus.setFlag(LED_STATUS_EMERGENCY, emergency::getState().active);
 
   delay(10);  // Small delay to prevent tight loop
 }
@@ -227,9 +247,13 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_RASPI_POWER, OUTPUT);
   pinMode(PIN_ENABLE_CHARGE, OUTPUT);
+  pinMode(PIN_ESC_SHUTDOWN, OUTPUT);
 
   digitalWrite(PIN_RASPI_POWER, HIGH);
   digitalWrite(PIN_ENABLE_CHARGE, LOW);
+  digitalWrite(PIN_ESC_SHUTDOWN, LOW);
+
+  emergency::init();
 
   ledStatus.init(PIN_NEOPIXEL, 1);
   ledStatus.setColor(0, 0, 0, false);  // reset
@@ -246,9 +270,11 @@ void loop()
 {
   while (!isSecondCoreSetupDone)
   {
+    emergency::update();
     delay(10);
   }
 
+  emergency::update();
   ledStatus.update();
   chargingLoop();
 

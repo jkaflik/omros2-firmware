@@ -13,6 +13,7 @@ enum LedStatusFlag
   LED_STATUS_DISCHARGING = (1 << 2),
   LED_STATUS_BATTERY_LOW = (1 << 3),
   LED_STATUS_IMU_FAILED = (1 << 4),
+  LED_STATUS_EMERGENCY = (1 << 5),
 };
 
 struct StatusColor
@@ -130,6 +131,12 @@ public:
 
     std::vector<LedStatusFlag> activeStatuses = getActiveStatuses();
 
+    if (getFlag(LED_STATUS_EMERGENCY))
+    {
+      setColor(255, 0, 0, true);
+      return;
+    }
+
     // with no active statuses, turn off the LED
     if (activeStatuses.empty())
     {
@@ -178,6 +185,7 @@ private:
     statusColorMap.push_back({LED_STATUS_DISCHARGING, {255, 0, 255}});  // Magenta for discharging
     statusColorMap.push_back({LED_STATUS_BATTERY_LOW, {255, 0, 0}});    // Red for battery low
     statusColorMap.push_back({LED_STATUS_IMU_FAILED, {0, 0, 255}});     // Blue for IMU failed
+    statusColorMap.push_back({LED_STATUS_EMERGENCY, {255, 0, 0}});      // Red blink for emergency
   }
 
   std::vector<LedStatusFlag> getActiveStatuses() const
