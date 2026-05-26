@@ -106,3 +106,15 @@ If you have an access to the Pico's UART0 directly on your host machine run:
 ```bash
 make agent MICRO_ROS_DEVICE=/dev/ttyAMA0
 ```
+
+## Hardware-in-the-loop tests
+
+The emergency feature has an interactive ROS 2 hardware test for real OpenMower hardware.
+Run it with flashed firmware and a running micro-ROS agent:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 test/hil/emergency_interactive.py
+```
+
+The test guides the operator through pressing STOP, activating one lift sensor, and activating two lift sensors. It verifies the published emergency topics and the three-message command confirmation rule.
