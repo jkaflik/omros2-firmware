@@ -1,0 +1,11 @@
+{
+  "names": {
+    "rmw_microxrcedds": {
+      "cmake-args": [
+        "-DRMW_UXRCE_ENTITY_CREATION_TIMEOUT=5000",
+        "-DRMW_UXRCE_ENTITY_DESTROY_TIMEOUT=1000",
+        "-DRMW_UXRCE_MAX_PUBLISHERS=16"
+      ]
+    }
+  }
+}

@@ -221,12 +221,21 @@ bool Timer::initialize()
     return false;
   }
 
-  set_timer_user_ptr(&timer_, this);
-
   ret = rclc_executor_add_timer(node_.get_support().get_executor(), &timer_);
-  initialized_ = (ret == RCL_RET_OK);
+  if (ret != RCL_RET_OK)
+  {
+    rcl_ret_t timer_ret = rcl_timer_fini(&timer_);
+    (void)timer_ret;
+    rcl_ret_t clock_ret = rcl_clock_fini(clock_);
+    (void)clock_ret;
+    delete clock_;
+    clock_ = nullptr;
+    return false;
+  }
 
-  return initialized_;
+  set_timer_user_ptr(&timer_, this);
+  initialized_ = true;
+  return true;
 }
 
 void Timer::callback()

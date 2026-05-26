@@ -9,18 +9,72 @@ verifies the ROS 2 emergency API exposed by the firmware.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import rclpy
+from omros2_firmware_msgs.msg import EmergencyStatus
 from rclpy.node import Node
-from std_msgs.msg import Bool, UInt8
+from std_msgs.msg import Bool
+
+
+COLOR_ENABLED = False
+COLOR_CODES = {
+    "bold": "\033[1m",
+    "dim": "\033[2m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "cyan": "\033[36m",
+    "reset": "\033[0m",
+}
 
 
 class TestFailure(RuntimeError):
     pass
+
+
+def configure_color(mode: str) -> None:
+    global COLOR_ENABLED
+
+    if mode == "never":
+        COLOR_ENABLED = False
+    elif mode == "always":
+        COLOR_ENABLED = True
+    else:
+        COLOR_ENABLED = "NO_COLOR" not in os.environ and sys.stdout.isatty()
+
+
+def colorize(text: str, *styles: str) -> str:
+    if not COLOR_ENABLED:
+        return text
+
+    prefix = "".join(COLOR_CODES[style] for style in styles)
+    return f"{prefix}{text}{COLOR_CODES['reset']}"
+
+
+def log_pass(description: str, state: Optional["EmergencySnapshot"] = None) -> None:
+    print(f"{colorize('PASS', 'green', 'bold')}: {description}")
+    if state is not None:
+        print(colorize(f"      {state.format()}", "dim"))
+
+
+def log_info(message: str) -> None:
+    print(colorize(message, "cyan"))
+
+
+def log_warn(message: str, state: Optional["EmergencySnapshot"] = None) -> None:
+    print(f"{colorize('WARN', 'yellow', 'bold')}: {message}")
+    if state is not None:
+        print(colorize(f"      {state.format()}", "dim"))
+
+
+def log_fail(message: str) -> None:
+    print(f"\n{colorize('FAIL', 'red', 'bold')}: {message}")
 
 
 @dataclass
@@ -63,27 +117,18 @@ class EmergencyProbe(Node):
         self.command_interval = command_interval
         self._subscriptions = []
         self.command_publisher = self.create_publisher(Bool, "emergency/command", 10)
-
-        self._subscribe_bool("emergency/active", "active")
-        self._subscribe_bool("emergency/stop_active", "stop_active")
-        self._subscribe_bool("emergency/lift_active", "lift_active")
-        self._subscribe_bool("emergency/tilt_active", "tilt_active")
-        self._subscribe_bool("emergency/software_requested", "software_requested")
-        self._subscribe_bool("emergency/release_blocked", "release_blocked")
         self._subscriptions.append(
-            self.create_subscription(UInt8, "emergency/lifted_wheels", self._lifted_wheels_cb, 10)
+            self.create_subscription(EmergencyStatus, "emergency/status", self._status_cb, 10)
         )
 
-    def _subscribe_bool(self, topic: str, field: str) -> None:
-        self._subscriptions.append(
-            self.create_subscription(Bool, topic, lambda msg, field=field: self._set(field, msg.data), 10)
-        )
-
-    def _lifted_wheels_cb(self, msg: UInt8) -> None:
-        self.snapshot.lifted_wheels = int(msg.data)
-
-    def _set(self, field: str, value: bool) -> None:
-        setattr(self.snapshot, field, bool(value))
+    def _status_cb(self, msg: EmergencyStatus) -> None:
+        self.snapshot.active = bool(msg.active)
+        self.snapshot.stop_active = bool(msg.stop_active)
+        self.snapshot.lift_active = bool(msg.lift_active)
+        self.snapshot.tilt_active = bool(msg.tilt_active)
+        self.snapshot.software_requested = bool(msg.software_requested)
+        self.snapshot.release_blocked = bool(msg.release_blocked)
+        self.snapshot.lifted_wheels = int(msg.lifted_wheels)
 
     def spin_for(self, duration: float) -> None:
         deadline = time.monotonic() + duration
@@ -100,21 +145,20 @@ class EmergencyProbe(Node):
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
             if predicate(self.snapshot):
-                print(f"PASS: {description}")
-                print(f"      {self.snapshot.format()}")
+                log_pass(description, self.snapshot)
                 return self.snapshot
 
         raise TestFailure(f"Timeout waiting for {description}. Last state: {self.snapshot.format()}")
 
     def wait_for_initial_messages(self, timeout: float) -> None:
-        self.wait_for(lambda state: state.is_complete(), timeout, "all emergency topics")
+        self.wait_for(lambda state: state.is_complete(), timeout, "emergency status topic")
 
     def wait_for_command_subscriber(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
             if self.command_publisher.get_subscription_count() > 0:
-                print("PASS: emergency command subscriber discovered")
+                log_pass("emergency command subscriber discovered")
                 return
 
         raise TestFailure("No subscriber discovered for emergency/command")
@@ -122,7 +166,7 @@ class EmergencyProbe(Node):
     def send_command(self, value: bool, count: int = 3) -> None:
         msg = Bool()
         msg.data = value
-        print(f"Publishing emergency/command={value} {count} time(s)")
+        log_info(f"Publishing emergency/command={value} {count} time(s)")
         for _ in range(count):
             self.command_publisher.publish(msg)
             self.spin_for(self.command_interval)
@@ -135,13 +179,23 @@ class EmergencyProbe(Node):
         self.send_command(True)
         self.wait_for(lambda state: state.active is True, timeout, "emergency latch active")
 
+    def ensure_latch_active(self, timeout: float) -> None:
+        if self.snapshot.active is True:
+            log_pass("emergency latch already active", self.snapshot)
+            return
+
+        log_warn("emergency latch was already released; latching before continuing", self.snapshot)
+        self.request_latch(timeout)
+
 
 def prompt(message: str) -> None:
-    input(f"\nACTION: {message}\nPress Enter when ready. ")
+    action = colorize("ACTION", "yellow", "bold")
+    prompt_text = colorize("Press Enter when ready.", "bold")
+    input(f"\n{action}: {colorize(message, 'yellow')}\n{prompt_text} ")
 
 
 def print_section(title: str) -> None:
-    print(f"\n=== {title} ===")
+    print(f"\n{colorize(f'=== {title} ===', 'blue', 'bold')}")
 
 
 def wait_for_clear_physical_inputs(probe: EmergencyProbe, timeout: float) -> None:
@@ -152,21 +206,24 @@ def wait_for_clear_physical_inputs(probe: EmergencyProbe, timeout: float) -> Non
     )
 
 
-def test_initial_latch(probe: EmergencyProbe, timeout: float) -> None:
-    print_section("Initial latch")
-    probe.wait_for(lambda state: state.active is True, timeout, "emergency latch active after boot")
+def test_initial_status(probe: EmergencyProbe) -> None:
+    print_section("Initial status")
+    if probe.snapshot.active is True:
+        log_pass("emergency latch active", probe.snapshot)
+    else:
+        log_warn("emergency latch already released; continuing rerunnable test", probe.snapshot)
 
 
 def test_command_confirmation(probe: EmergencyProbe, timeout: float) -> None:
     print_section("Command confirmation")
     wait_for_clear_physical_inputs(probe, timeout)
 
-    probe.wait_for(lambda state: state.active is True, timeout, "emergency latch active before release")
+    probe.ensure_latch_active(timeout)
     probe.send_command(False, count=2)
     probe.spin_for(0.3)
     if probe.snapshot.active is not True:
         raise TestFailure("Emergency latch released after only two release commands")
-    print("PASS: two release commands are not enough")
+    log_pass("two release commands are not enough")
 
     probe.send_command(False, count=1)
     probe.wait_for(lambda state: state.active is False, timeout, "third release command accepted")
@@ -184,7 +241,7 @@ def test_command_window_timeout(probe: EmergencyProbe, timeout: float) -> None:
     probe.spin_for(0.3)
     if probe.snapshot.active is not False:
         raise TestFailure("Emergency latch accepted commands outside the one second window")
-    print("PASS: command confirmation window expires")
+    log_pass("command confirmation window expires")
 
 
 def test_software_latch(probe: EmergencyProbe, timeout: float) -> None:
@@ -197,7 +254,6 @@ def test_software_latch(probe: EmergencyProbe, timeout: float) -> None:
         timeout,
         "software emergency request reported",
     )
-
     probe.release_latch(timeout)
     probe.wait_for(
         lambda state: state.software_requested is False,
@@ -290,14 +346,21 @@ def parse_args() -> argparse.Namespace:
         default=0.2,
         help="Interval between repeated emergency commands",
     )
+    parser.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Colorize output: auto, always, or never",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    configure_color(args.color)
 
-    print("Interactive OpenMower emergency HIL test")
-    print("Prerequisites:")
+    print(colorize("Interactive OpenMower emergency HIL test", "bold"))
+    print(colorize("Prerequisites:", "bold"))
     print("- Firmware from this branch is flashed on the OpenMower mainboard.")
     print("- micro-ROS agent is running and connected to the firmware.")
     print("- The mower is physically safe to handle.")
@@ -312,7 +375,7 @@ def main() -> int:
         probe.wait_for_initial_messages(args.timeout)
         probe.wait_for_command_subscriber(args.timeout)
 
-        test_initial_latch(probe, args.timeout)
+        test_initial_status(probe)
         test_command_confirmation(probe, args.timeout)
         test_command_window_timeout(probe, args.timeout)
         test_software_latch(probe, args.timeout)
@@ -320,13 +383,13 @@ def main() -> int:
         test_single_lift_input(probe, args.timeout)
         test_double_lift_input(probe, args.timeout)
 
-        print("\nAll emergency HIL checks passed.")
+        print(f"\n{colorize('All emergency HIL checks passed.', 'green', 'bold')}")
         return 0
     except (KeyboardInterrupt, EOFError):
-        print("\nTest interrupted.")
+        print(f"\n{colorize('Test interrupted.', 'yellow', 'bold')}")
         return 130
     except TestFailure as exc:
-        print(f"\nFAIL: {exc}")
+        log_fail(str(exc))
         return 1
     finally:
         probe.destroy_node()

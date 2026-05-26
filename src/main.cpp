@@ -1,10 +1,10 @@
 #include <std_msgs/msg/bool.h>
 #include <std_msgs/msg/float32.h>
-#include <std_msgs/msg/u_int8.h>
 
 #include <Arduino.h>
 #include <EMA.h>
 #include <micro_ros_platformio.h>
+#include <omros2_firmware_msgs/msg/emergency_status.h>
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
@@ -142,9 +142,6 @@ void setup1()
 
   support = new uros::Support();
   auto node = new uros::Node(*support, "openmower_mainboard");
-  auto randomNumberPublisher = new uros::Publisher<std_msgs__msg__Float32>(
-    *node, "random_number", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32));
-
   auto imuPublisher = new uros::Publisher<sensor_msgs__msg__Imu>(
     *node, "imu/data_raw", UROS_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu));
   auto imuTimer = new uros::Timer(*node,
@@ -171,44 +168,36 @@ void setup1()
 
   auto batteryStatePublisher = new uros::Publisher<sensor_msgs__msg__BatteryState>(
     *node, "power", UROS_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState));
-  auto batteryStateTimer = new uros::Timer(*node,
-                                           1000,
-                                           [batteryStatePublisher]()
-                                           {
-                                             auto& msg = batteryStatePublisher->get_message();
-
-                                             auto ns = rmw_uros_epoch_nanos();
-                                             msg.header.stamp.sec = ns / 1000000000;
-                                             msg.header.stamp.nanosec = ns % 1000000000;
-                                             msg.voltage = batteryVoltage;
-                                             msg.charge = chargeCurrent;
-                                             msg.percentage = batteryPercentage;
-                                             msg.present = batteryPresent;
-                                             msg.power_supply_status = powerSupplyStatus;
-                                             msg.power_supply_health = powerSupplyHealth;
-
-                                             batteryStatePublisher->publish();
-                                           });
   auto chargeVoltagePublisher = new uros::Publisher<std_msgs__msg__Float32>(
     *node, "power/charge_voltage", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32));
-  auto chargeVoltageTimer = new uros::Timer(*node,
-                                            1000,
-                                            [chargeVoltagePublisher]()
-                                            {
-                                              auto& msg = chargeVoltagePublisher->get_message();
-                                              msg.data = chargeVoltage;
-                                              chargeVoltagePublisher->publish();
-                                            });
   auto chargerPresentPublisher = new uros::Publisher<std_msgs__msg__Bool>(
     *node, "power/charger_present", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto chargerPresentTimer = new uros::Timer(*node,
-                                             1000,
-                                             [chargerPresentPublisher]()
-                                             {
-                                               auto& msg = chargerPresentPublisher->get_message();
-                                               msg.data = isChargerPresent;
-                                               chargerPresentPublisher->publish();
-                                             });
+  auto powerTimer = new uros::Timer(
+    *node,
+    1000,
+    [batteryStatePublisher, chargeVoltagePublisher, chargerPresentPublisher]()
+    {
+      auto& batteryMsg = batteryStatePublisher->get_message();
+
+      auto ns = rmw_uros_epoch_nanos();
+      batteryMsg.header.stamp.sec = ns / 1000000000;
+      batteryMsg.header.stamp.nanosec = ns % 1000000000;
+      batteryMsg.voltage = batteryVoltage;
+      batteryMsg.charge = chargeCurrent;
+      batteryMsg.percentage = batteryPercentage;
+      batteryMsg.present = batteryPresent;
+      batteryMsg.power_supply_status = powerSupplyStatus;
+      batteryMsg.power_supply_health = powerSupplyHealth;
+      batteryStatePublisher->publish();
+
+      auto& chargeVoltageMsg = chargeVoltagePublisher->get_message();
+      chargeVoltageMsg.data = chargeVoltage;
+      chargeVoltagePublisher->publish();
+
+      auto& chargerPresentMsg = chargerPresentPublisher->get_message();
+      chargerPresentMsg.data = isChargerPresent;
+      chargerPresentPublisher->publish();
+    });
 
   auto emergencyCommandSubscription = new uros::Subscriber<std_msgs__msg__Bool>(
     *node,
@@ -216,50 +205,26 @@ void setup1()
     UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
     [](const std_msgs__msg__Bool& msg) { emergency::handleCommand(msg.data); });
 
-  auto emergencyActivePublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencyStopPublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/stop_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencyLiftPublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/lift_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencyTiltPublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/tilt_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencySoftwarePublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/software_requested", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencyReleaseBlockedPublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "emergency/release_blocked", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
-  auto emergencyLiftedWheelsPublisher = new uros::Publisher<std_msgs__msg__UInt8>(
-    *node, "emergency/lifted_wheels", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8));
+  auto emergencyStatusPublisher = new uros::Publisher<omros2_firmware_msgs__msg__EmergencyStatus>(
+    *node,
+    "emergency/status",
+    UROS_GET_MSG_TYPE_SUPPORT(omros2_firmware_msgs, msg, EmergencyStatus));
   auto emergencyTimer = new uros::Timer(
     *node,
     100,
-    [emergencyActivePublisher,
-     emergencyStopPublisher,
-     emergencyLiftPublisher,
-     emergencyTiltPublisher,
-     emergencySoftwarePublisher,
-     emergencyReleaseBlockedPublisher,
-     emergencyLiftedWheelsPublisher]()
+    [emergencyStatusPublisher]()
     {
       auto state = emergency::getState();
+      auto& msg = emergencyStatusPublisher->get_message();
 
-      auto publishBool = [](uros::Publisher<std_msgs__msg__Bool>* publisher, bool value)
-      {
-        auto& msg = publisher->get_message();
-        msg.data = value;
-        publisher->publish();
-      };
-
-      publishBool(emergencyActivePublisher, state.active);
-      publishBool(emergencyStopPublisher, state.stop_active);
-      publishBool(emergencyLiftPublisher, state.lift_active);
-      publishBool(emergencyTiltPublisher, state.tilt_active);
-      publishBool(emergencySoftwarePublisher, state.software_requested);
-      publishBool(emergencyReleaseBlockedPublisher, state.release_blocked);
-
-      auto& liftedWheelsMsg = emergencyLiftedWheelsPublisher->get_message();
-      liftedWheelsMsg.data = state.lifted_wheels;
-      emergencyLiftedWheelsPublisher->publish();
+      msg.active = state.active;
+      msg.stop_active = state.stop_active;
+      msg.lift_active = state.lift_active;
+      msg.tilt_active = state.tilt_active;
+      msg.software_requested = state.software_requested;
+      msg.release_blocked = state.release_blocked;
+      msg.lifted_wheels = state.lifted_wheels;
+      emergencyStatusPublisher->publish();
     });
 
   isSecondCoreSetupDone = true;

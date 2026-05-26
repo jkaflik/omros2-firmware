@@ -42,13 +42,19 @@ Emergency state is published at 10 Hz:
 
 | Topic | Type | Description |
 | --- | --- | --- |
-| `emergency/active` | `std_msgs/msg/Bool` | Emergency latch is active. |
-| `emergency/stop_active` | `std_msgs/msg/Bool` | Stop input is active after debounce. |
-| `emergency/lift_active` | `std_msgs/msg/Bool` | Lift emergency is active. |
-| `emergency/tilt_active` | `std_msgs/msg/Bool` | Tilt emergency is active. |
-| `emergency/software_requested` | `std_msgs/msg/Bool` | Emergency was requested by ROS. |
-| `emergency/release_blocked` | `std_msgs/msg/Bool` | Release is blocked by an active physical input. |
-| `emergency/lifted_wheels` | `std_msgs/msg/UInt8` | Number of active lift inputs. |
+| `emergency/status` | `omros2_firmware_msgs/msg/EmergencyStatus` | Combined emergency status. |
+
+`EmergencyStatus` fields:
+
+| Field | Description |
+| --- | --- |
+| `active` | Emergency latch is active. |
+| `stop_active` | Stop input is active after debounce. |
+| `lift_active` | Lift emergency is active. |
+| `tilt_active` | Tilt emergency is active. |
+| `software_requested` | Emergency was requested by ROS. |
+| `release_blocked` | Release is blocked by an active physical input. |
+| `lifted_wheels` | Number of active lift inputs. |
 
 Commands are accepted on `emergency/command` as `std_msgs/msg/Bool`:
 
@@ -114,7 +120,10 @@ Run it with flashed firmware and a running micro-ROS agent:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
+colcon build --base-paths extra_packages --build-base build/hil --install-base install/hil
+source install/hil/setup.bash
 python3 test/hil/emergency_interactive.py
 ```
 
-The test guides the operator through pressing STOP, activating one lift sensor, and activating two lift sensors. It verifies the published emergency topics and the three-message command confirmation rule.
+The test guides the operator through pressing STOP, activating one lift sensor, and activating two lift sensors. It verifies the published emergency status and the three-message command confirmation rule.
+The test is rerunnable on the same firmware boot; if the emergency latch was released by a previous run, the script reports that state and re-latches before continuing.
