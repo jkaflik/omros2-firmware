@@ -1,15 +1,17 @@
 #include <std_msgs/msg/bool.h>
-#include <std_msgs/msg/float32.h>
 
 #include <Arduino.h>
 #include <EMA.h>
 #include <micro_ros_platformio.h>
 #include <omros2_firmware_msgs/msg/emergency_status.h>
+#include <omros2_firmware_msgs/msg/power_status.h>
 #include <rcl/rcl.h>
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
 #include <sensor_msgs/msg/battery_state.h>
 #include <sensor_msgs/msg/imu.h>
+
+#include <algorithm>
 
 #include "emergency.h"
 #include "hardware.h"
@@ -39,7 +41,56 @@ uint8_t powerSupplyStatus = 0;
 uint8_t powerSupplyHealth = 0;
 bool batteryPresent = false;
 bool chargeEnabled = false;
+bool chargingAllowed = false;
+bool batteryFullLatched = false;
+uint8_t chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_DISCHARGING;
+uint8_t chargeInhibitReason = omros2_firmware_msgs__msg__PowerStatus__INHIBIT_NONE;
+uint32_t chargeRetryRemainingMs = 0;
+ulong chargingDisabledTime = 0;
 ulong lastChargingLoop = 0;
+
+bool shouldStartRetryDelay(uint8_t reason)
+{
+  return reason == omros2_firmware_msgs__msg__PowerStatus__INHIBIT_BATTERY_OVERVOLTAGE
+         || reason == omros2_firmware_msgs__msg__PowerStatus__INHIBIT_CHARGE_OVERVOLTAGE
+         || reason == omros2_firmware_msgs__msg__PowerStatus__INHIBIT_OVERCURRENT;
+}
+
+uint8_t getChargingInhibitReason()
+{
+  if (!batteryPresent)
+  {
+    return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_NO_BATTERY;
+  }
+
+  if (batteryVoltage > BATT_ABSOLUTE_MAX)
+  {
+    return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_BATTERY_OVERVOLTAGE;
+  }
+
+  if (chargeVoltage > CHARGE_VOLTAGE_CUTOFF)
+  {
+    return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_CHARGE_OVERVOLTAGE;
+  }
+
+  if (chargeCurrent >= CHARGE_CURRENT_CUTOFF)
+  {
+    return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_OVERCURRENT;
+  }
+
+  if (batteryFullLatched)
+  {
+    return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_BATTERY_FULL;
+  }
+
+  return omros2_firmware_msgs__msg__PowerStatus__INHIBIT_NONE;
+}
+
+void setChargeEnabled(bool enabled)
+{
+  chargeEnabled = enabled;
+  digitalWrite(PIN_ENABLE_CHARGE, chargeEnabled ? HIGH : LOW);
+}
 
 void manageBatteryCharging()
 {
@@ -58,23 +109,79 @@ void manageBatteryCharging()
 
   isChargerPresent = chargeVoltage >= CHARGER_PRESENT_VOLTAGE;
 
-  batteryPercentage =
-    std::min((batteryVoltage - BATT_EMPTY) / (BATT_FULL - BATT_EMPTY) * 100, 100.0f);
+  batteryPercentage = std::min(
+    std::max((batteryVoltage - BATT_EMPTY) / (BATT_FULL - BATT_EMPTY) * 100, 0.0f), 100.0f);
 
-  bool shouldCharge = chargeVoltage <= CHARGE_VOLTAGE_CUTOFF
-                      && chargeCurrent < CHARGE_CURRENT_CUTOFF
-                      && batteryVoltage <= BATT_ABSOLUTE_MAX && batteryVoltage;
-  chargeEnabled = shouldCharge && batteryVoltage < BATT_FULL_HYSTERESIS;
-
-  digitalWrite(PIN_ENABLE_CHARGE, chargeEnabled ? HIGH : LOW);
-
-  bool isCharging = chargeVoltage > batteryVoltage;
-
-  if (shouldCharge)
+  if (batteryVoltage >= BATT_FULL)
   {
-    powerSupplyStatus = isCharging
-                          ? sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING
-                          : sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_NOT_CHARGING;
+    batteryFullLatched = true;
+  }
+  else if (batteryVoltage <= BATT_FULL_HYSTERESIS)
+  {
+    batteryFullLatched = false;
+  }
+
+  const auto now = millis();
+  const uint8_t previousInhibitReason = chargeInhibitReason;
+
+  chargeRetryRemainingMs = 0;
+  chargeInhibitReason = omros2_firmware_msgs__msg__PowerStatus__INHIBIT_NONE;
+
+  if (chargeVoltage < CHARGE_REGEN_VOLTAGE)
+  {
+    setChargeEnabled(true);
+    chargingAllowed = false;
+    chargingDisabledTime = 0;
+    chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_REGEN_PATH;
+  }
+  else
+  {
+    const uint8_t limitReason = getChargingInhibitReason();
+    if (limitReason != omros2_firmware_msgs__msg__PowerStatus__INHIBIT_NONE)
+    {
+      if (shouldStartRetryDelay(limitReason)
+          && (chargingAllowed || chargeEnabled || previousInhibitReason != limitReason))
+      {
+        chargingDisabledTime = now;
+      }
+      else if (!shouldStartRetryDelay(limitReason))
+      {
+        chargingDisabledTime = 0;
+      }
+
+      setChargeEnabled(false);
+      chargingAllowed = false;
+      chargeInhibitReason = limitReason;
+      chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_NOT_CHARGING;
+    }
+    else if (chargingDisabledTime != 0 && now - chargingDisabledTime < CHARGING_RETRY_MILLIS)
+    {
+      setChargeEnabled(false);
+      chargingAllowed = false;
+      chargeInhibitReason = omros2_firmware_msgs__msg__PowerStatus__INHIBIT_RETRY_DELAY;
+      chargeRetryRemainingMs = CHARGING_RETRY_MILLIS - (now - chargingDisabledTime);
+      chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_RETRY_WAIT;
+    }
+    else
+    {
+      setChargeEnabled(true);
+      chargingAllowed = true;
+      chargingDisabledTime = 0;
+      chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_NOT_CHARGING;
+      if (chargeVoltage > batteryVoltage)
+      {
+        chargingState = omros2_firmware_msgs__msg__PowerStatus__CHARGING_STATE_CHARGING;
+      }
+    }
+  }
+
+  if (chargingAllowed)
+  {
+    powerSupplyStatus = sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_NOT_CHARGING;
+    if (chargeVoltage > batteryVoltage)
+    {
+      powerSupplyStatus = sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_CHARGING;
+    }
   }
   else
   {
@@ -89,7 +196,7 @@ void manageBatteryCharging()
     }
     else if (batteryVoltage > BATT_ABSOLUTE_MAX)
     {
-      powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_OVERHEAT;
+      powerSupplyHealth = sensor_msgs__msg__BatteryState__POWER_SUPPLY_HEALTH_OVERVOLTAGE;
     }
     else
     {
@@ -168,14 +275,12 @@ void setup1()
 
   auto batteryStatePublisher = new uros::Publisher<sensor_msgs__msg__BatteryState>(
     *node, "power", UROS_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState));
-  auto chargeVoltagePublisher = new uros::Publisher<std_msgs__msg__Float32>(
-    *node, "power/charge_voltage", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32));
-  auto chargerPresentPublisher = new uros::Publisher<std_msgs__msg__Bool>(
-    *node, "power/charger_present", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto powerStatusPublisher = new uros::Publisher<omros2_firmware_msgs__msg__PowerStatus>(
+    *node, "power/status", UROS_GET_MSG_TYPE_SUPPORT(omros2_firmware_msgs, msg, PowerStatus));
   auto powerTimer = new uros::Timer(
     *node,
     1000,
-    [batteryStatePublisher, chargeVoltagePublisher, chargerPresentPublisher]()
+    [batteryStatePublisher, powerStatusPublisher]()
     {
       auto& batteryMsg = batteryStatePublisher->get_message();
 
@@ -183,20 +288,30 @@ void setup1()
       batteryMsg.header.stamp.sec = ns / 1000000000;
       batteryMsg.header.stamp.nanosec = ns % 1000000000;
       batteryMsg.voltage = batteryVoltage;
-      batteryMsg.charge = chargeCurrent;
-      batteryMsg.percentage = batteryPercentage;
+      batteryMsg.current = chargeCurrent;
+      batteryMsg.capacity = BATT_DESIGNED_CAPACITY;
+      batteryMsg.design_capacity = BATT_DESIGNED_CAPACITY;
+      batteryMsg.percentage = batteryPercentage / 100.0f;
       batteryMsg.present = batteryPresent;
       batteryMsg.power_supply_status = powerSupplyStatus;
       batteryMsg.power_supply_health = powerSupplyHealth;
       batteryStatePublisher->publish();
 
-      auto& chargeVoltageMsg = chargeVoltagePublisher->get_message();
-      chargeVoltageMsg.data = chargeVoltage;
-      chargeVoltagePublisher->publish();
-
-      auto& chargerPresentMsg = chargerPresentPublisher->get_message();
-      chargerPresentMsg.data = isChargerPresent;
-      chargerPresentPublisher->publish();
+      auto& powerStatusMsg = powerStatusPublisher->get_message();
+      powerStatusMsg.stamp.sec = ns / 1000000000;
+      powerStatusMsg.stamp.nanosec = ns % 1000000000;
+      powerStatusMsg.battery_voltage = batteryVoltage;
+      powerStatusMsg.battery_percentage = batteryPercentage;
+      powerStatusMsg.battery_present = batteryPresent;
+      powerStatusMsg.charge_voltage = chargeVoltage;
+      powerStatusMsg.charge_current = chargeCurrent;
+      powerStatusMsg.charger_present = isChargerPresent;
+      powerStatusMsg.charge_path_enabled = chargeEnabled;
+      powerStatusMsg.charging_allowed = chargingAllowed;
+      powerStatusMsg.charging_state = chargingState;
+      powerStatusMsg.inhibit_reason = chargeInhibitReason;
+      powerStatusMsg.retry_remaining_ms = chargeRetryRemainingMs;
+      powerStatusPublisher->publish();
     });
 
   auto emergencyCommandSubscription = new uros::Subscriber<std_msgs__msg__Bool>(

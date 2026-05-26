@@ -21,6 +21,17 @@ More details about this firmware can be found in [documentation](https://jkaflik
 
 ## Usage
 
+### Power ROS API
+
+Battery state is published at 1 Hz:
+
+| Topic | Type | Description |
+| --- | --- | --- |
+| `power` | `sensor_msgs/msg/BatteryState` | Standard battery status. `percentage` is normalized to `0.0..1.0`; current is the measured charge current in amps. |
+| `power/status` | `omros2_firmware_msgs/msg/PowerStatus` | Firmware-specific power and charging snapshot. |
+
+`PowerStatus` includes battery voltage and percentage, charge voltage/current, charger presence, the actual charge-enable output, whether dock charging is allowed, the charging state, inhibit reason, and retry delay remaining.
+
 ### LED Status Indicators
 
 The firmware uses onboard NeoPixel LED(s) to display the current system status. Multiple status conditions can be active simultaneously and will be displayed in sequence.
