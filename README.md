@@ -14,9 +14,9 @@ More details about this firmware can be found in [documentation](https://jkaflik
 - [x] Charging
 - [x] LED status
 - [x] IMU
-- [ ] Emergency mode
-  - [ ] Emergency publisher
-  - [ ] Emergency restart service
+- [x] Emergency mode
+  - [x] Emergency publishers
+  - [x] Latched emergency command topic
 - [ ] Cover panel support
 
 ## Usage
@@ -31,8 +31,35 @@ The firmware uses onboard NeoPixel LED(s) to display the current system status. 
 - **Magenta**: Battery discharging
 - **Red**: Battery low
 - **Blue**: IMU sensor failure
+- **Blinking red**: Emergency latch active
 
 When multiple statuses are active, each status will be shown for approximately 800ms with a 200ms black separator between them. The sequence will continue to cycle through all active statuses.
+Emergency has priority over the normal status sequence and is shown as a blinking red LED.
+
+### Emergency ROS API
+
+Emergency state is published at 10 Hz:
+
+| Topic | Type | Description |
+| --- | --- | --- |
+| `emergency/active` | `std_msgs/msg/Bool` | Emergency latch is active. |
+| `emergency/stop_active` | `std_msgs/msg/Bool` | Stop input is active after debounce. |
+| `emergency/lift_active` | `std_msgs/msg/Bool` | Lift emergency is active. |
+| `emergency/tilt_active` | `std_msgs/msg/Bool` | Tilt emergency is active. |
+| `emergency/software_requested` | `std_msgs/msg/Bool` | Emergency was requested by ROS. |
+| `emergency/release_blocked` | `std_msgs/msg/Bool` | Release is blocked by an active physical input. |
+| `emergency/lifted_wheels` | `std_msgs/msg/UInt8` | Number of active lift inputs. |
+
+Commands are accepted on `emergency/command` as `std_msgs/msg/Bool`:
+
+| Value | Meaning |
+| --- | --- |
+| `true` | Request/latch emergency. |
+| `false` | Request emergency release. |
+
+The same command value must be received three times within one second before it is accepted.
+Release requests are ignored while any physical stop/lift/tilt input is active.
+The emergency latch starts active after boot and must be released explicitly.
 
 ## Build
 

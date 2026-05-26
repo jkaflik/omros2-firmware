@@ -5,6 +5,7 @@
 #include <rclc/executor.h>
 #include <rclc/rclc.h>
 
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
@@ -55,6 +56,7 @@ enum class State
 class Node;
 class TimerBase;
 class PublisherBase;
+class SubscriptionBase;
 
 /**
  * @brief Support class that manages ROS 2 resources for microROS.
@@ -169,6 +171,36 @@ protected:
   friend class Support;
 };
 
+class SubscriptionBase
+{
+public:
+  SubscriptionBase(Node& node, const char* topic_name);
+  virtual ~SubscriptionBase();
+
+  virtual bool initialize() = 0;
+  virtual void callback(const void* msgin) = 0;
+  bool is_initialized() const
+  {
+    return initialized_;
+  }
+
+  void cleanup();
+
+  static void* get_subscription_user_ptr(const void* message_ptr);
+  static void set_subscription_user_ptr(const void* message_ptr, void* user_ptr);
+  static void clear_subscription_user_ptr(const void* message_ptr);
+
+protected:
+  Node& node_;
+  std::string topic_name_;
+  bool initialized_;
+  rcl_subscription_t subscription_;
+  const void* message_ptr_;
+
+  friend class Node;
+  friend class Support;
+};
+
 /**
  * @brief A ROS2 Node implementation.
  *
@@ -203,6 +235,12 @@ public:
   // Initialize publishers if node is ready
   bool initialize_publishers();
 
+  // Add a subscription to this node
+  void add_subscription(SubscriptionBase* subscription);
+
+  // Initialize subscriptions if node is ready
+  bool initialize_subscriptions();
+
   // Cleanup node resources
   void cleanup();
 
@@ -220,9 +258,11 @@ private:
   bool initialized_;
   std::vector<TimerBase*> timers_;
   std::vector<PublisherBase*> publishers_;
+  std::vector<SubscriptionBase*> subscriptions_;
 
   friend class Support;
   friend class TimerBase;
+  friend class SubscriptionBase;
 };
 
 /**
@@ -326,6 +366,93 @@ public:
 private:
   MessageT message_;
   const rosidl_message_type_support_t* type_support_;
+  rmw_qos_profile_t qos_profile_;
+};
+
+template <typename MessageT>
+class Subscriber : public SubscriptionBase
+{
+public:
+  using CallbackType = std::function<void(const MessageT&)>;
+
+  Subscriber(Node& node,
+             const char* topic_name,
+             const rosidl_message_type_support_t* type_support,
+             CallbackType callback,
+             const rmw_qos_profile_t& qos_profile = rmw_qos_profile_default)
+    : SubscriptionBase(node, topic_name),
+      type_support_(type_support),
+      callback_(callback),
+      qos_profile_(qos_profile)
+  {
+    subscription_ = rcl_get_zero_initialized_subscription();
+    memset(&message_, 0, sizeof(MessageT));
+  }
+
+  ~Subscriber() override
+  {
+    cleanup();
+  }
+
+  bool initialize() override
+  {
+    if (!node_.is_initialized() || initialized_)
+    {
+      return false;
+    }
+
+    rcl_subscription_options_t sub_opts = rcl_subscription_get_default_options();
+    sub_opts.qos = qos_profile_;
+
+    rcl_ret_t ret = rcl_subscription_init(
+      &subscription_, node_.get_handle(), type_support_, topic_name_.c_str(), &sub_opts);
+    if (ret != RCL_RET_OK)
+    {
+      return false;
+    }
+
+    message_ptr_ = &message_;
+    set_subscription_user_ptr(message_ptr_, this);
+
+    ret = rclc_executor_add_subscription(node_.get_support().get_executor(),
+                                         &subscription_,
+                                         &message_,
+                                         subscription_callback,
+                                         ON_NEW_DATA);
+    if (ret != RCL_RET_OK)
+    {
+      clear_subscription_user_ptr(message_ptr_);
+      message_ptr_ = nullptr;
+      rcl_ret_t fini_ret = rcl_subscription_fini(&subscription_, node_.get_handle());
+      (void)fini_ret;
+      return false;
+    }
+
+    initialized_ = true;
+    return true;
+  }
+
+  void callback(const void* msgin) override
+  {
+    if (callback_ && msgin != nullptr)
+    {
+      callback_(*static_cast<const MessageT*>(msgin));
+    }
+  }
+
+private:
+  static void subscription_callback(const void* msgin)
+  {
+    auto* subscription_obj = static_cast<SubscriptionBase*>(get_subscription_user_ptr(msgin));
+    if (subscription_obj != nullptr)
+    {
+      subscription_obj->callback(msgin);
+    }
+  }
+
+  MessageT message_;
+  const rosidl_message_type_support_t* type_support_;
+  CallbackType callback_;
   rmw_qos_profile_t qos_profile_;
 };
 

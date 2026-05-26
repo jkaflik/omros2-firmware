@@ -1,5 +1,6 @@
 #include <std_msgs/msg/bool.h>
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/u_int8.h>
 
 #include <Arduino.h>
 #include <EMA.h>
@@ -10,6 +11,7 @@
 #include <sensor_msgs/msg/battery_state.h>
 #include <sensor_msgs/msg/imu.h>
 
+#include "emergency.h"
 #include "hardware.h"
 #include "imu.h"
 #include "led_status.hpp"
@@ -208,6 +210,58 @@ void setup1()
                                                chargerPresentPublisher->publish();
                                              });
 
+  auto emergencyCommandSubscription = new uros::Subscriber<std_msgs__msg__Bool>(
+    *node,
+    "emergency/command",
+    UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+    [](const std_msgs__msg__Bool& msg) { emergency::handleCommand(msg.data); });
+
+  auto emergencyActivePublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencyStopPublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/stop_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencyLiftPublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/lift_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencyTiltPublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/tilt_active", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencySoftwarePublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/software_requested", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencyReleaseBlockedPublisher = new uros::Publisher<std_msgs__msg__Bool>(
+    *node, "emergency/release_blocked", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool));
+  auto emergencyLiftedWheelsPublisher = new uros::Publisher<std_msgs__msg__UInt8>(
+    *node, "emergency/lifted_wheels", UROS_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8));
+  auto emergencyTimer = new uros::Timer(
+    *node,
+    100,
+    [emergencyActivePublisher,
+     emergencyStopPublisher,
+     emergencyLiftPublisher,
+     emergencyTiltPublisher,
+     emergencySoftwarePublisher,
+     emergencyReleaseBlockedPublisher,
+     emergencyLiftedWheelsPublisher]()
+    {
+      auto state = emergency::getState();
+
+      auto publishBool = [](uros::Publisher<std_msgs__msg__Bool>* publisher, bool value)
+      {
+        auto& msg = publisher->get_message();
+        msg.data = value;
+        publisher->publish();
+      };
+
+      publishBool(emergencyActivePublisher, state.active);
+      publishBool(emergencyStopPublisher, state.stop_active);
+      publishBool(emergencyLiftPublisher, state.lift_active);
+      publishBool(emergencyTiltPublisher, state.tilt_active);
+      publishBool(emergencySoftwarePublisher, state.software_requested);
+      publishBool(emergencyReleaseBlockedPublisher, state.release_blocked);
+
+      auto& liftedWheelsMsg = emergencyLiftedWheelsPublisher->get_message();
+      liftedWheelsMsg.data = state.lifted_wheels;
+      emergencyLiftedWheelsPublisher->publish();
+    });
+
   isSecondCoreSetupDone = true;
 }
 
@@ -216,6 +270,7 @@ void loop1()
   support->spin();
 
   ledStatus.setFlag(LED_STATUS_ROS_CONNECTED, support->get_state() == uros::State::AGENT_CONNECTED);
+  ledStatus.setFlag(LED_STATUS_EMERGENCY, emergency::getState().active);
 
   delay(10);  // Small delay to prevent tight loop
 }
@@ -227,9 +282,13 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_RASPI_POWER, OUTPUT);
   pinMode(PIN_ENABLE_CHARGE, OUTPUT);
+  pinMode(PIN_ESC_SHUTDOWN, OUTPUT);
 
   digitalWrite(PIN_RASPI_POWER, HIGH);
   digitalWrite(PIN_ENABLE_CHARGE, LOW);
+  digitalWrite(PIN_ESC_SHUTDOWN, LOW);
+
+  emergency::init();
 
   ledStatus.init(PIN_NEOPIXEL, 1);
   ledStatus.setColor(0, 0, 0, false);  // reset
@@ -246,9 +305,11 @@ void loop()
 {
   while (!isSecondCoreSetupDone)
   {
+    emergency::update();
     delay(10);
   }
 
+  emergency::update();
   ledStatus.update();
   chargingLoop();
 

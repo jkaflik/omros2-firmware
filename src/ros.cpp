@@ -5,6 +5,7 @@
 
 #include <unordered_map>
 static std::unordered_map<const rcl_timer_t*, void*> timer_user_data;
+static std::unordered_map<const void*, void*> subscription_user_data;
 
 namespace uros
 {
@@ -36,7 +37,7 @@ bool Support::initialize_entities()
   RCCHECK(rclc_support_init(&support_, 0, NULL, &allocator_));
 
   executor_ = rclc_executor_get_zero_initialized_executor();
-  RCCHECK(rclc_executor_init(&executor_, &support_.context, 10, &allocator_));
+  RCCHECK(rclc_executor_init(&executor_, &support_.context, 16, &allocator_));
 
   for (auto* node : nodes_)
   {
@@ -246,6 +247,55 @@ void PublisherBase::cleanup()
   }
 }
 
+void* SubscriptionBase::get_subscription_user_ptr(const void* message_ptr)
+{
+  auto it = subscription_user_data.find(message_ptr);
+  if (it != subscription_user_data.end())
+  {
+    return it->second;
+  }
+  return nullptr;
+}
+
+void SubscriptionBase::set_subscription_user_ptr(const void* message_ptr, void* user_ptr)
+{
+  subscription_user_data[message_ptr] = user_ptr;
+}
+
+void SubscriptionBase::clear_subscription_user_ptr(const void* message_ptr)
+{
+  subscription_user_data.erase(message_ptr);
+}
+
+void SubscriptionBase::cleanup()
+{
+  if (initialized_)
+  {
+    rcl_ret_t ret = rcl_subscription_fini(&subscription_, node_.get_handle());
+    (void)ret;
+
+    if (message_ptr_ != nullptr)
+    {
+      clear_subscription_user_ptr(message_ptr_);
+      message_ptr_ = nullptr;
+    }
+
+    initialized_ = false;
+  }
+}
+
+SubscriptionBase::SubscriptionBase(Node& node, const char* topic_name)
+  : node_(node), topic_name_(topic_name), initialized_(false), message_ptr_(nullptr)
+{
+  subscription_ = rcl_get_zero_initialized_subscription();
+  node.add_subscription(this);
+}
+
+SubscriptionBase::~SubscriptionBase()
+{
+  cleanup();
+}
+
 PublisherBase::PublisherBase(Node& node, const char* topic_name)
   : node_(node), topic_name_(topic_name), initialized_(false)
 {
@@ -280,6 +330,12 @@ Node::~Node()
     delete publisher;
   }
   publishers_.clear();
+
+  for (auto* subscription : subscriptions_)
+  {
+    delete subscription;
+  }
+  subscriptions_.clear();
 }
 
 void Node::cleanup()
@@ -294,6 +350,11 @@ void Node::cleanup()
     for (auto* timer : timers_)
     {
       timer->cleanup();
+    }
+
+    for (auto* subscription : subscriptions_)
+    {
+      subscription->cleanup();
     }
 
     rcl_ret_t ret = rcl_node_fini(&node_);
@@ -359,6 +420,32 @@ bool Node::initialize_publishers()
   return success;
 }
 
+void Node::add_subscription(SubscriptionBase* subscription)
+{
+  subscriptions_.push_back(subscription);
+
+  if (initialized_)
+  {
+    subscription->initialize();
+  }
+}
+
+bool Node::initialize_subscriptions()
+{
+  if (!initialized_)
+  {
+    return false;
+  }
+
+  bool success = true;
+  for (auto* subscription : subscriptions_)
+  {
+    success &= subscription->initialize();
+  }
+
+  return success;
+}
+
 bool Node::initialize()
 {
   if (initialized_)
@@ -379,8 +466,9 @@ bool Node::initialize()
 
   bool timers_ok = initialize_timers();
   bool publishers_ok = initialize_publishers();
+  bool subscriptions_ok = initialize_subscriptions();
 
-  return timers_ok && publishers_ok;
+  return timers_ok && publishers_ok && subscriptions_ok;
 }
 
 }  // namespace uros
