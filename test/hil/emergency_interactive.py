@@ -208,10 +208,10 @@ def wait_for_clear_physical_inputs(probe: EmergencyProbe, timeout: float) -> Non
 
 def test_initial_status(probe: EmergencyProbe) -> None:
     print_section("Initial status")
-    if probe.snapshot.active is True:
-        log_pass("emergency latch active", probe.snapshot)
+    if probe.snapshot.active is False:
+        log_pass("emergency latch inactive after boot", probe.snapshot)
     else:
-        log_warn("emergency latch already released; continuing rerunnable test", probe.snapshot)
+        log_warn("emergency latch already active; continuing rerunnable test", probe.snapshot)
 
 
 def test_command_confirmation(probe: EmergencyProbe, timeout: float) -> None:

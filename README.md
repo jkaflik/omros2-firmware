@@ -65,7 +65,8 @@ Commands are accepted on `emergency/command` as `std_msgs/msg/Bool`:
 
 The same command value must be received three times within one second before it is accepted.
 Release requests are ignored while any physical stop/lift/tilt input is active.
-The emergency latch starts active after boot and must be released explicitly.
+The emergency latch starts inactive after boot when physical inputs are clear.
+Physical stop/lift/tilt inputs and `emergency/command=true` latch emergency explicitly.
 
 ## Build
 
@@ -126,4 +127,4 @@ python3 test/hil/emergency_interactive.py
 ```
 
 The test guides the operator through pressing STOP, activating one lift sensor, and activating two lift sensors. It verifies the published emergency status and the three-message command confirmation rule.
-The test is rerunnable on the same firmware boot; if the emergency latch was released by a previous run, the script reports that state and re-latches before continuing.
+The test is rerunnable on the same firmware boot; if the emergency latch is inactive at the start, the script reports that expected state and latches before checks that require an active latch.

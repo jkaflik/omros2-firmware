@@ -17,7 +17,7 @@ constexpr uint8_t COMMAND_CONFIRMATIONS_REQUIRED = 3;
 
 auto_init_mutex(emergency_mutex);
 
-bool latch_active = true;
+bool latch_active = false;
 bool stop_active = false;
 bool lift_active = false;
 bool tilt_active = false;
